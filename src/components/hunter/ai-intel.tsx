@@ -1,0 +1,242 @@
+"use client";
+
+import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import {
+  Brain, Loader2, Download, Copy, Check, TriangleAlert,
+  Lightbulb, Sparkles, Building2, Target, ListChecks, ShieldAlert, Wand2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import { apiFetch, downloadFile } from "@/lib/api-client";
+import { useHunterStore } from "@/lib/hunter-store";
+import type { AnalyzeResponse, RepoIntel } from "@/lib/hunter-types";
+
+const MONEY_STYLE: Record<RepoIntel["moneyLevel"], { cls: string; emoji: string }> = {
+  "בטוח": { cls: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200", emoji: "💰" },
+  "סביר": { cls: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200", emoji: "💵" },
+  "חלש": { cls: "border-zinc-300 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-300", emoji: "🪙" },
+  "לא ידוע": { cls: "border-zinc-300 bg-zinc-50 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-300", emoji: "❔" },
+};
+
+export function intelToMarkdown(r: RepoIntel, a: AnalyzeResponse): string {
+  const L: string[] = [];
+  L.push(`# 🧠 דוח מודיעין AI — ${a.repo.fullName}`);
+  L.push(`_נוצר: ${new Date(r.generatedAt).toLocaleString("he-IL")} · ציון השקעה: ${a.score.total}/100_`);
+  L.push(`\n## פסק דין\n${r.verdict}`);
+  L.push(`\n## הערכת השקעה (${r.moneyLevel})\n${r.moneyVerdict || "—"}`);
+  if (r.whatTheyBuilt.length) L.push(`\n## מה הם בנו\n${r.whatTheyBuilt.map((x) => `- ${x}`).join("\n")}`);
+  if (r.brilliant.length) L.push(`\n## ✨ נקודות גאוניות\n${r.brilliant.map((x) => `- ${x}`).join("\n")}`);
+  if (r.stealThis.length)
+    L.push(`\n## 🥷 מה לגנוב לממשק שלנו\n${r.stealThis.map((s) => `### ${s.what}\n- למה: ${s.why || "—"}\n- איך: ${s.how || "—"}`).join("\n")}`);
+  if (r.doBetter.length)
+    L.push(`\n## 🚀 איפה אנחנו ננצח\n${r.doBetter.map((d) => `- **הפער שלהם:** ${d.gap}\n  - **המהלך שלנו:** ${d.ourMove || "—"}`).join("\n")}`);
+  if (r.actionItems.length) L.push(`\n## ✅ תוכנית פעולה\n${r.actionItems.map((x, i) => `${i + 1}. ${x}`).join("\n")}`);
+  if (r.riskNotes.length) L.push(`\n## ⚠️ הערות סיכון\n${r.riskNotes.map((x) => `- ${x}`).join("\n")}`);
+  L.push(`\n---\n_נוצר על-ידי Claude Hunter · סף מודלים 5.5+_`);
+  return L.join("\n");
+}
+
+function Section({
+  icon, title, children, accent,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  accent?: string;
+}) {
+  return (
+    <div className={`rounded-xl border p-3 space-y-2 ${accent ?? "bg-card"}`}>
+      <p className="flex items-center gap-1.5 text-sm font-semibold">
+        {icon} {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+export function RepoIntelSection({ analysis }: { analysis: AnalyzeResponse }) {
+  const token = useHunterStore((s) => s.token);
+  const [copied, setCopied] = useState(false);
+
+  const gen = useMutation({
+    mutationFn: () =>
+      apiFetch<RepoIntel>("/api/intel", token, { method: "POST", body: JSON.stringify(analysis) }),
+  });
+
+  const report = gen.data;
+
+  const copyMd = async () => {
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(intelToMarkdown(report, analysis));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable
+    }
+  };
+
+  const exportMd = () => {
+    if (!report) return;
+    downloadFile(
+      `intel-${analysis.repo.fullName.replace("/", "-")}-${Date.now()}.md`,
+      intelToMarkdown(report, analysis),
+      "text/markdown;charset=utf-8"
+    );
+  };
+
+  return (
+    <div className="space-y-3 rounded-xl border-2 border-orange-200 bg-gradient-to-b from-orange-50/70 to-transparent p-4 dark:border-orange-900 dark:from-orange-950/20">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-sm font-bold">
+          <Brain className="h-4 w-4 text-orange-600" /> דוח מודיעין AI — תוכנית קרב למוצר שלנו
+        </p>
+        <div className="flex gap-1.5">
+          {report && (
+            <>
+              <Button variant="outline" size="sm" onClick={copyMd} className="h-8 gap-1 text-xs">
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? "הועתק" : "העתק"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportMd} className="h-8 gap-1 text-xs">
+                <Download className="h-3.5 w-3.5" /> Markdown
+              </Button>
+            </>
+          )}
+          <Button
+            size="sm"
+            onClick={() => gen.mutate()}
+            disabled={gen.isPending}
+            className="h-8 gap-1.5 bg-gradient-to-l from-orange-500 to-amber-600 text-xs text-white hover:from-orange-600 hover:to-amber-700"
+          >
+            {gen.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+            {gen.isPending ? "האנליסט קורא את הראיות…" : report ? "חדש את הדוח" : "צור דוח מודיעין"}
+          </Button>
+        </div>
+      </div>
+
+      {gen.isPending && (
+        <div className="space-y-2 pt-1">
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ה-AI מצליב את הראיות מול המודלים, הפקודות, הסוכנים וה-README… (עד כדקה)
+          </p>
+        </div>
+      )}
+
+      {gen.isError && (
+        <Alert variant="destructive">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle className="text-sm">הדוח נכשל</AlertTitle>
+          <AlertDescription className="text-xs">
+            {(gen.error as Error)?.message}
+            <Button variant="outline" size="sm" onClick={() => gen.mutate()} className="mr-2 h-7 text-xs">
+              נסה שוב
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {report && (
+        <div className="space-y-3 pt-1">
+          {/* verdict + money */}
+          <div className="rounded-xl border border-orange-300 bg-white/70 p-3 dark:border-orange-800 dark:bg-orange-950/30">
+            <p className="flex items-start gap-2 text-sm font-semibold leading-relaxed">
+              <Target className="mt-0.5 h-4 w-4 shrink-0 text-orange-600" />
+              {report.verdict}
+            </p>
+            <div className={`mt-2 rounded-lg border px-3 py-2 text-xs leading-relaxed ${MONEY_STYLE[report.moneyLevel].cls}`}>
+              <span className="font-bold">{MONEY_STYLE[report.moneyLevel].emoji} השקעה: {report.moneyLevel}</span>
+              {report.moneyVerdict && <span> — {report.moneyVerdict}</span>}
+            </div>
+          </div>
+
+          {report.whatTheyBuilt.length > 0 && (
+            <Section icon={<Building2 className="h-4 w-4 text-muted-foreground" />} title="מה הם בנו">
+              <ul className="space-y-1">
+                {report.whatTheyBuilt.map((x, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-sm">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400" />
+                    {x}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+
+          {report.brilliant.length > 0 && (
+            <Section icon={<Sparkles className="h-4 w-4 text-amber-500" />} title="נקודות גאוניות" accent="border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+              <ul className="space-y-1">
+                {report.brilliant.map((x, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-sm text-amber-900 dark:text-amber-200">
+                    <Sparkles className="mt-1 h-3 w-3 shrink-0" />
+                    {x}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+
+          {report.stealThis.length > 0 && (
+            <Section icon={<Lightbulb className="h-4 w-4 text-orange-600" />} title="🥷 מה לגנוב לממשק שלנו">
+              <div className="space-y-2">
+                {report.stealThis.map((s, i) => (
+                  <div key={i} className="rounded-lg border bg-background/60 p-2.5 text-sm">
+                    <p className="font-semibold">{s.what}</p>
+                    {s.why && <p className="mt-0.5 text-xs text-muted-foreground">למה זה עובד אצלם: {s.why}</p>}
+                    {s.how && <p className="mt-0.5 text-xs text-emerald-700 dark:text-emerald-300">מימוש אצלנו: {s.how}</p>}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {report.doBetter.length > 0 && (
+            <Section icon={<Target className="h-4 w-4 text-emerald-600" />} title="איפה אנחנו ננצח" accent="border-emerald-200 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20">
+              <div className="space-y-2">
+                {report.doBetter.map((d, i) => (
+                  <div key={i} className="rounded-lg border border-emerald-200/70 bg-background/60 p-2.5 text-sm dark:border-emerald-900/60">
+                    <p className="text-red-700 dark:text-red-300"><span className="font-semibold">הפער שלהם:</span> {d.gap}</p>
+                    <p className="mt-0.5 text-emerald-800 dark:text-emerald-200"><span className="font-semibold">המהלך שלנו:</span> {d.ourMove || "—"}</p>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {report.actionItems.length > 0 && (
+            <Section icon={<ListChecks className="h-4 w-4 text-orange-600" />} title="תוכנית פעולה לספרינט">
+              <ol className="space-y-1">
+                {report.actionItems.map((x, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    <Badge variant="secondary" className="mt-0.5 h-5 shrink-0 px-1.5 text-[10px]">{i + 1}</Badge>
+                    <span>{x}</span>
+                  </li>
+                ))}
+              </ol>
+            </Section>
+          )}
+
+          {report.riskNotes.length > 0 && (
+            <Section icon={<ShieldAlert className="h-4 w-4 text-amber-600" />} title="הערות סיכון" accent="border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+              <ul className="space-y-1">
+                {report.riskNotes.map((x, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-amber-900 dark:text-amber-200">
+                    <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
+                    {x}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

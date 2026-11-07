@@ -1,0 +1,155 @@
+// ============================================================
+// כורה DNA — חילוץ יכולות Claude חיות מריפואי אליטה
+// סורק .claude/, CLAUDE.md, AGENTS.md ומוריד את התוכן האמיתי.
+// זו השכבה שהופכת "ריפו מוצלח" לגנים ניידים להשתלה.
+// ============================================================
+
+import { ghFetch, ghFetchRaw } from "./github";
+
+export interface MinedArtifact {
+  path: string;
+  kind: "skill" | "command" | "agent" | "claude-md" | "agents-md" | "mcp-config";
+  name: string;
+  description: string | null;
+  content: string | null;
+  rawUrl: string | null;
+  size: number;
+  truncated: boolean;
+}
+
+export interface DnaPackage {
+  repo: string;
+  defaultBranch: string;
+  artifacts: MinedArtifact[];
+  scannedAt: string;
+}
+
+interface GhTree {
+  truncated?: boolean;
+  tree: { path: string; type: string; size?: number }[];
+}
+
+const MAX_FILE_BYTES = 12_000; // חיתוך תוכן לקובץ — מספיק ל-AI, חוסך מכסה
+
+/** סיווג נתיב לסוג DNA */
+function classify(path: string): MinedArtifact["kind"] | null {
+  const p = path.toLowerCase();
+  if (p === "claude.md") return "claude-md";
+  if (p === "agents.md") return "agents-md";
+  // SKILL.md בכל מיקום — כולל ריפואי סקילים רשמיים (skills/<cat>/<name>/SKILL.md)
+  if (/skill\.md$/.test(p) && p.includes("skill")) return "skill";
+  if (p.includes(".claude/commands/") && /\.md$/.test(p)) return "command";
+  if (p.includes(".claude/agents/") && /\.md$/.test(p)) return "agent";
+  if (p.includes(".mcp.json") || p.includes("mcp_config")) return "mcp-config";
+  return null;
+}
+
+/** חילוץ שם מפורמט frontmatter או מהנתיב */
+function extractName(path: string, content: string | null, kind: MinedArtifact["kind"]): string {
+  if (content) {
+    const m = content.match(/^---\n([\s\S]*?)\n---/);
+    if (m) {
+      const nameLine = m[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
+      if (nameLine) return nameLine;
+    }
+    const h1 = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
+    if (h1 && h1.length <= 80) return h1;
+  }
+  if (kind === "skill") {
+    const parts = path.split("/");
+    return parts[parts.length - 2] ?? path;
+  }
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/\.(md|json)$/i, "");
+}
+
+/** חילוץ description מ-frontmatter */
+function extractDescription(content: string | null): string | null {
+  if (!content) return null;
+  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  if (m) {
+    const d = m[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
+    if (d) return d.slice(0, 300);
+  }
+  return null;
+}
+
+/**
+ * כריית DNA מלאה מריפו: סריקת עץ → סינון קבצי יכולת → הורדת תכנים במקביל.
+ */
+export async function mineDna(
+  owner: string,
+  repo: string,
+  token: string | null
+): Promise<DnaPackage> {
+  const full = `${owner}/${repo}`;
+  const meta = await ghFetch<{ default_branch: string }>(`/repos/${full}`, token);
+  const branch = meta.default_branch || "main";
+
+  const tree = await ghFetch<GhTree>(
+    `/repos/${full}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
+    token
+  );
+
+  const candidates = (tree.tree ?? [])
+    .filter((t) => t.type === "blob")
+    .map((t) => ({ path: t.path, size: t.size ?? 0, kind: classify(t.path) }))
+    .filter((t): t is { path: string; size: number; kind: NonNullable<ReturnType<typeof classify>> } => !!t.kind)
+    // עדיפות: skills ופקודות קודם, ואז CLAUDE.md; הגבלת גודל סבירה
+    .sort((a, b) => rank(a.kind) - rank(b.kind))
+    .slice(0, 12);
+
+  const results = await Promise.allSettled(
+    candidates.map(async (c): Promise<MinedArtifact> => {
+      let content: string | null = null;
+      let rawUrl: string | null = null;
+      let truncated = false;
+      try {
+        content = await ghFetchRaw(
+          `/repos/${full}/contents/${c.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`,
+          token
+        );
+        rawUrl = `https://github.com/${full}/blob/${branch}/${c.path}`;
+      } catch {
+        content = null;
+      }
+      if (content && content.length > MAX_FILE_BYTES) {
+        content = content.slice(0, MAX_FILE_BYTES) + "\n\n… [נחתך לכרייה]";
+        truncated = true;
+      }
+      return {
+        path: c.path,
+        kind: c.kind,
+        name: extractName(c.path, content, c.kind),
+        description: extractDescription(content),
+        content,
+        rawUrl,
+        size: c.size,
+        truncated,
+      };
+    })
+  );
+
+  const artifacts = results
+    .filter((r): r is PromiseFulfilledResult<MinedArtifact> => r.status === "fulfilled")
+    .map((r) => r.value);
+
+  return { repo: full, defaultBranch: branch, artifacts, scannedAt: new Date().toISOString() };
+}
+
+function rank(kind: MinedArtifact["kind"]): number {
+  switch (kind) {
+    case "skill":
+      return 0;
+    case "command":
+      return 1;
+    case "agent":
+      return 2;
+    case "claude-md":
+      return 3;
+    case "agents-md":
+      return 4;
+    case "mcp-config":
+      return 5;
+  }
+}

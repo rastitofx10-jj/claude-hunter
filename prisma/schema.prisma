@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// מאגרים שנשמרו למעקב (Watchlist)
+model SavedRepo {
+  id          Int      @id @default(autoincrement())
+  fullName    String   @unique // owner/name
+  owner       String
+  name        String
+  url         String
+  description String?
+  stars       Int      @default(0)
+  score       Int      @default(0)
+  models      String?  // רשימת מודלים שזוהו, מופרדת בפסיקים
+  evidence    String?  // JSON של ראיות
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// היסטוריית חיפושים
+model SearchHistory {
+  id          Int      @id @default(autoincrement())
+  mode        String   // repos | code
+  query       String
+  filters     String?  // JSON של המסננים
+  resultCount Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+// הגדרות מערכת (key-value) — בין היתר: טוקן GitHub לשימוש השרת
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ארטיפקט DNA — קובץ יכולת שנכרה מריפו אליטה (skill/command/agent/CLAUDE.md)
+model DnaArtifact {
+  id          Int      @id @default(autoincrement())
+  sourceRepo  String   // owner/name
+  path        String   // נתיב מלא בריפו
+  kind        String   // skill | command | agent | claude-md | agents-md | mcp-config
+  name        String   // שם היכולת
+  description String?
+  content     String?  // תוכן הקובץ (מלא או קטע)
+  rawUrl      String?
+  size        Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([sourceRepo, path])
+}
+
+// כימרה — יצירת AI ממוזגת מכמה ריפואי אליטה + פקודות עבודה למוצר שלנו
+model Chimera {
+  id          Int      @id @default(autoincrement())
+  name        String
+  sources     String   // רשימת ריפואי מקור, מופרדת בפסיקים
+  skillMd     String   // SKILL.md מלא מוכן להזרקה
+  principles  String?  // JSON מערך עקרונות
+  workOrders  String?  // JSON מערך פקודות עבודה
+  breakthrough String? // הרעיון הפורץ הבודד
+  createdAt   DateTime @default(now())
+}
+
+// משימה מרוכבת — מטרה בשפה טבעית שהופכת לתוכנית קרב ניתנת לביצוע
+// עם בחירת DNA רלוונטי אוטומטית + לולאת דיווח שדה שמולידה DNA חדש
+model Mission {
+  id              Int      @id @default(autoincrement())
+  goal            String   // המטרה בשפה טבעית
+  context         String?  // הקשר נוסף מהמשתמש
+  status          String   @default("compiled") // compiled | in_progress | done | failed
+  missionName     String   // שם קוד למשימה
+  plan            String   // JSON: מערך שלבים (phases) עם צעדים
+  dnaRefs         String?  // JSON: מזהי DnaArtifact שנבחרו + נימוקים
+  promptSequence  String?  // JSON: רצף פרומפטים מוכנים להדבקה ב-Claude Code
+  skillMd         String?  // SKILL.md מבצעי מלא להזרקה
+  risks           String?  // JSON מערך סיכונים
+  successCriteria String?  // JSON מערך קריטריוני הצלחה
+  report          String?  // JSON: תוצאה, לקחים מזוקקים
+  autopilot       String?  // JSON: מערך תוצרי ריצה אוטונומית לכל שלב
+  autopilotAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// סריקת עומק — מבצע מודיעין מלא: ארסנל שאילתות ← כרייה ← להקת פרומפטים
+// נשמרת כריצה שלמה כדי שניתן יהיה לעקוב, לשחזר ולהשוות בין סבבים.
+model SweepRun {
+  id        Int       @id @default(autoincrement())
+  status    String    @default("running") // running | done | failed
+  phase     String    @default("queries") // queries | enrich | mine | swarm | done
+  progress  Int       @default(0) // 0-100
+  queries   String?   // JSON: כל שאילתה שבוצעה + מספר תוצאות
+  stats     String?   // JSON: candidatesFound, reposMined, dnaAdded, llmCalls, elapsedMs...
+  findings  String?   // JSON: מועמדים מדורגים עם פסקי דין
+  briefing  String?   // JSON: תוצרי להקת הפרומפטים (דפוסים, תוכנית תקיפה, שאילתות הבאות)
+  error     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
