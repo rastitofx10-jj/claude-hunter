@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseSweepRow } from "@/lib/sweep-runner";
+import { isPrismaNotFound } from "@/lib/ai-json";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,10 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   try {
     await db.sweepRun.delete({ where: { id: numId } });
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (e) {
+    if (isPrismaNotFound(e)) {
+      return NextResponse.json({ error: "הסריקה לא נמצאה" }, { status: 404 });
+    }
     return NextResponse.json({ error: "המחיקה נכשלה — ייתכן שהסריקה רצה כרגע" }, { status: 500 });
   }
 }

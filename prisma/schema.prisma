@@ -101,6 +101,7 @@ model SweepRun {
   stats     String?   // JSON: candidatesFound, reposMined, dnaAdded, llmCalls, elapsedMs...
   findings  String?   // JSON: מועמדים מדורגים עם פסקי דין
   briefing  String?   // JSON: תוצרי להקת הפרומפטים (דפוסים, תוכנית תקיפה, שאילתות הבאות)
+  audit     String?   // JSON: ביקורת אדברסרית — אימות ראיות חי + ציון anti-slop
   error     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt

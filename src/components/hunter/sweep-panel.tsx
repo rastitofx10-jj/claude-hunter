@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   Lightbulb,
   Target,
+  ShieldCheck,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -83,6 +84,20 @@ interface Briefing {
   llmFailures?: string[];
 }
 
+interface AuditResult {
+  status: "running" | "done" | "failed";
+  stage: string;
+  evidenceChecks: { fullName: string; claimed: string; filesFound: number; verified: boolean; proofFile?: string; error?: string }[];
+  precision: number;
+  specificityScore: number;
+  slopFlags: { claim: string; why: string }[];
+  refutedClaims: { claim: string; why: string }[];
+  verdict: string;
+  llmCalls: number;
+  error?: string;
+  auditedAt?: string;
+}
+
 interface SweepDetail {
   id: number;
   status: "running" | "done" | "failed";
@@ -92,6 +107,7 @@ interface SweepDetail {
   stats: SweepStats;
   findings: Finding[];
   briefing: Briefing | null;
+  audit: AuditResult | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -139,7 +155,7 @@ export function SweepPanel() {
     queryKey: ["sweep-detail", selectedId],
     queryFn: () => apiFetch<SweepDetail>(`/api/sweep/${selectedId}`, token),
     enabled: selectedId !== null,
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 2500 : false),
+    refetchInterval: (q) => (q.state.data?.status === "running" || q.state.data?.audit?.status === "running" ? 2500 : false),
   });
 
   // גלילת לוג השאילתות אוטומטית
@@ -156,9 +172,19 @@ export function SweepPanel() {
     onError: (e: Error) => toast({ title: "השגירה נכשלה", description: e.message, variant: "destructive" }),
   });
 
+  const launchAudit = useMutation({
+    mutationFn: () => apiFetch<{ ok: boolean; id: number }>(`/api/sweep/${selectedId}/audit`, token, { method: "POST" }),
+    onSuccess: () => {
+      toast({ title: "הביקורת האדברסרית הושקה 🔥", description: "מאמתים כל ראיה מול GitHub ומריצים anti-slop" });
+      void qc.invalidateQueries({ queryKey: ["sweep-detail", selectedId] });
+    },
+    onError: (e: Error) => toast({ title: "הביקורת נכשלה", description: e.message, variant: "destructive" }),
+  });
+
   const detail = detailQuery.data;
   const running = detail?.status === "running";
   const briefing = detail?.briefing ?? null;
+  const audit = detail?.audit ?? null;
   const stats = detail?.stats ?? {};
 
   const phaseIndex = useMemo(() => {
@@ -349,6 +375,136 @@ export function SweepPanel() {
                 )}
               </div>
             )}
+
+            {/* ביקורת אדברסרית */}
+            <div className="rounded-xl border border-red-200 bg-red-50/40 p-4 dark:border-red-900 dark:bg-red-950/10">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-1.5 text-sm font-bold text-red-800 dark:text-red-300">
+                  <ShieldCheck className="h-4 w-4" aria-hidden /> ביקורת אדברסרית — המערכת מפחדת מהחלק הזה
+                </p>
+                {detail.status === "done" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => launchAudit.mutate()}
+                    disabled={launchAudit.isPending || audit?.status === "running"}
+                    className="min-h-9 border-red-300 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300"
+                  >
+                    {audit?.status === "running" ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                        בודק אכזרית… ({audit.stage})
+                      </>
+                    ) : (
+                      "הרץ ביקורת אכזרית"
+                    )}
+                  </Button>
+                )}
+              </div>
+
+              {audit?.status === "failed" && (
+                <p className="text-xs text-destructive">הביקורת נכשלה: {audit.error}</p>
+              )}
+
+              {audit?.status === "done" && (
+                <div className="space-y-3">
+                  {/* ציונים */}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border bg-card p-2 text-center">
+                      <p className={`text-2xl font-bold ${audit.precision >= 90 ? "text-emerald-600" : audit.precision >= 70 ? "text-amber-600" : "text-red-600"}`}>
+                        {audit.precision}%
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">דיוק ראיות חי</p>
+                    </div>
+                    <div className="rounded-lg border bg-card p-2 text-center">
+                      <p className={`text-2xl font-bold ${audit.specificityScore >= 80 ? "text-emerald-600" : audit.specificityScore >= 60 ? "text-amber-600" : "text-red-600"}`}>
+                        {audit.specificityScore}/100
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">ציון anti-slop</p>
+                    </div>
+                    <div className="rounded-lg border bg-card p-2 text-center">
+                      <p className="text-2xl font-bold">{audit.evidenceChecks.length}</p>
+                      <p className="text-[11px] text-muted-foreground">ראיות נבדקו חי</p>
+                    </div>
+                    <div className="rounded-lg border bg-card p-2 text-center">
+                      <p className="text-2xl font-bold text-red-600">{audit.slopFlags.length + audit.refutedClaims.length}</p>
+                      <p className="text-[11px] text-muted-foreground">סלופ/נסתרות שאותרו</p>
+                    </div>
+                  </div>
+
+                  {/* טבלת אימות ראיות */}
+                  <div className="max-h-52 overflow-y-auto rounded-lg border" role="region" aria-label="תוצאות אימות ראיות">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                        <tr className="text-right text-xs text-muted-foreground">
+                          <th className="p-2 font-medium">מאגר</th>
+                          <th className="p-2 font-medium">ראיה נטענת</th>
+                          <th className="p-2 font-medium">קבצים במאגר</th>
+                          <th className="p-2 font-medium">פסק</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {audit.evidenceChecks.map((c) => (
+                          <tr key={c.fullName} className={`border-t ${!c.verified ? "bg-red-50/60 dark:bg-red-950/20" : ""}`}>
+                            <td className="max-w-44 p-2">
+                              <span dir="ltr" className="block truncate text-right font-mono text-xs">{c.fullName}</span>
+                            </td>
+                            <td className="p-2 font-mono text-xs" dir="ltr">
+                              {c.claim}
+                              {c.proofFile && (
+                                <span dir="ltr" className="block truncate text-right text-[10px] text-emerald-600">📄 {c.proofFile}</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-xs font-bold">{c.filesFound}</td>
+                            <td className="p-2 text-xs">
+                              {c.verified ? (
+                                <span className="font-bold text-emerald-600">✓ אומתה</span>
+                              ) : (
+                                <span className="font-bold text-red-600">✗ נסתרה</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {audit.verdict && (
+                    <p className="rounded-md border bg-card p-2 text-sm leading-relaxed">
+                      <strong>פסק הביקורת:</strong> {audit.verdict}
+                    </p>
+                  )}
+
+                  {(audit.refutedClaims?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="mb-1 text-xs font-bold text-red-700 dark:text-red-300">טענות שנסתרו על-ידי האימות החי</p>
+                      <ul className="space-y-1 text-xs leading-relaxed">
+                        {audit.refutedClaims.map((r, i) => (
+                          <li key={i} className="rounded-md border border-red-200 bg-red-50/70 p-1.5 dark:border-red-900 dark:bg-red-950/20">
+                            <span className="font-medium">{r.claim.slice(0, 160)}</span>
+                            {r.why && <span className="block text-muted-foreground">{r.why.slice(0, 160)}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {(audit.slopFlags?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="mb-1 text-xs font-bold text-amber-700 dark:text-amber-300">דגלי סלופ — גנרי/לא נתמך בראיות</p>
+                      <ul className="space-y-1 text-xs leading-relaxed">
+                        {audit.slopFlags.map((s, i) => (
+                          <li key={i} className="rounded-md border border-amber-200 bg-amber-50/70 p-1.5 dark:border-amber-900 dark:bg-amber-950/20">
+                            <span className="font-medium">{s.claim.slice(0, 160)}</span>
+                            {s.why && <span className="block text-muted-foreground">{s.why.slice(0, 160)}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* טבלת ממצאים */}
             {(detail.findings?.length ?? 0) > 0 && (

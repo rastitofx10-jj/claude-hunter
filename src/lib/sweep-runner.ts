@@ -19,6 +19,7 @@ import {
 } from "./deep-sweep";
 import { runSwarm, type SwarmResult } from "./intel-swarm";
 import { resolveToken } from "./server-token";
+import { parseAudit } from "./auditor";
 import type { NextRequest } from "next/server";
 
 const activeRuns = new Set<number>();
@@ -211,6 +212,7 @@ export function parseSweepRow(row: {
     stats: safeJsonParse<Record<string, number>>(row.stats, {}),
     findings: safeJsonParse<unknown[]>(row.findings, []),
     briefing: safeJsonParse<Record<string, unknown> | null>(row.briefing, null),
+    audit: parseAudit(row.audit),
     error: row.error,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

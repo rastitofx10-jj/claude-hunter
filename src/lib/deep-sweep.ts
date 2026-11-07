@@ -60,6 +60,8 @@ export interface CodeHit {
   path: string;
   repo: string;
   capability: boolean;
+  /** השאילתה שמצאה את הקובץ — GitHub קוד-סרץ' מתאים תוכן קובץ, ולכן זו הוכחה שהמחרוזת בתוכן */
+  viaQuery: string;
 }
 
 export interface RepoHit {
@@ -76,11 +78,17 @@ export interface Candidate {
   description: string | null;
   pushedAt: string | null;
   topics: string[];
-  /** מחרוזות מודל מזכה שנמצאו במקורות שונים */
+  /** הוכחה: נמצא בתוכן קובץ אמיתי (GitHub code search מתאים תוכן) — ראיה קשה */
+  contentEvidence: string[];
+  /** נמצא רק בתיאור/topics/נתיב — ראיה רכה, לא הוכחה של שימוש בקוד */
+  textEvidence: string[];
+  /** נתיבי קבצים אמיתיים שבהם נמצאה מחרוזת מודל רשומה — קרקע-אמת לאימות חוזר */
+  evidencePaths: string[];
+  /** לתצוגה: איחוד שני המקורות */
   modelStrings: string[];
   /** כמה קבצי יכולת נתגלו (SKILL.md, .claude/ וכו') */
   capabilityHits: number;
-  /** דיוק ראיית המודל: hard (מחרוזת מודל בקוד) | soft (אזכור claude בתיאור) | none */
+  /** דיוק ראיית המודל: hard (מחרוזת מודל בתוכן קוד — מאומת) | soft (אזכור בתיאור/נתיב) | none */
   evidence: "hard" | "soft" | "none";
   alreadyMined: boolean;
   score: number;
@@ -182,7 +190,7 @@ export async function runQueryArsenal(
           const key = `${r.full_name}::${item.path}`;
           if (seenCode.has(key)) continue;
           seenCode.add(key);
-          codeHits.push({ path: item.path, repo: r.full_name, capability: isCapabilityPath(item.path) });
+          codeHits.push({ path: item.path, repo: r.full_name, capability: isCapabilityPath(item.path), viaQuery: query.q });
         }
       } else {
         const resp = await searchWithBackoff<GhSearchResp<GhRepoItem>>(
@@ -223,7 +231,10 @@ function modelStringWeight(s: string): number {
   return 0;
 }
 
-/** שלב ב׳ — איחוד גילויים למועמדים מדורגים לפי ראיות */
+/** שלב ב׳ — איחוד גילויים למועמדים מדורגים לפי ראיות, עם הפרדת מקורות מחמירה:
+ *  — contentEvidence: GitHub code search התאים את המחרוזת בתוכן קובץ אמיתי (מאומת)
+ *  — textEvidence: המחרוזת מופיעה רק בתיאור/topics/נתיב (לא הוכחה של קוד)
+ *  — evidence=hard אך ורק אם יש contentEvidence. אין קידום תיאור ל"קוד". */
 export function consolidateCandidates(
   codeHits: CodeHit[],
   repoHits: RepoHit[]
@@ -239,6 +250,9 @@ export function consolidateCandidates(
         description: null,
         pushedAt: null,
         topics: [],
+        contentEvidence: [],
+        textEvidence: [],
+        evidencePaths: [],
         modelStrings: [],
         capabilityHits: 0,
         evidence: "none",
@@ -251,11 +265,26 @@ export function consolidateCandidates(
     return c;
   };
 
+  // מיפוי שאילתה → מזהה מודל רשומי (לפי ה-origin של הארסנל)
+  const queryToModel = new Map<string, string>();
+  for (const m of QUALIFYING_MODELS) {
+    for (const s of m.searchStrings) queryToModel.set(s.toLowerCase(), m.id);
+  }
+
   for (const hit of codeHits) {
     const c = ensure(hit.repo);
     if (hit.capability) c.capabilityHits++;
-    const detected = detectClaudeModels(hit.path).qualifying;
-    for (const d of detected) if (!c.modelStrings.includes(d.id)) c.modelStrings.push(d.id);
+    // הוכחת תוכן רק למחרוזת מודל רשומה: השאילתה נמצאה בתוכן הקובץ, אבל
+    // שאילתות יכולת/שוק (למשל SKILL.md claude) אינן הוכחת מודל — רק סימן soft.
+    const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
+    if (asModel) {
+      if (!c.contentEvidence.includes(asModel)) c.contentEvidence.push(asModel);
+      // שמירת נתיב הקובץ האמיתי — קרקע-אמת לאימות חוזר במודול הביקורת
+      if (c.evidencePaths.length < 3 && !c.evidencePaths.includes(hit.path)) c.evidencePaths.push(hit.path);
+    }
+    // זיהוי משני מהנתיב — רק ראיה רכה
+    const pathDetected = detectClaudeModels(hit.path).qualifying;
+    for (const d of pathDetected) if (!c.textEvidence.includes(d.id)) c.textEvidence.push(d.id);
     if (!c.via.includes("code")) c.via.push("code");
   }
 
@@ -266,13 +295,15 @@ export function consolidateCandidates(
     c.pushedAt = hit.pushedAt ?? c.pushedAt;
     c.topics = Array.from(new Set([...c.topics, ...hit.topics]));
     if (!c.via.includes("repo")) c.via.push("repo");
+    // אזכור בתיאור/topics — ראיה רכה בלבד, אף פעם לא hard
     const hay = [hit.fullName, hit.description ?? "", hit.topics.join(" ")].join(" ");
     const detected = detectClaudeModels(hay).qualifying;
-    for (const d of detected) if (!c.modelStrings.includes(d.id)) c.modelStrings.push(d.id);
+    for (const d of detected) if (!c.textEvidence.includes(d.id)) c.textEvidence.push(d.id);
   }
 
   const candidates = Array.from(map.values());
   for (const c of candidates) {
+    c.modelStrings = Array.from(new Set([...c.contentEvidence, ...c.textEvidence]));
     const listScore = computeListScore({
       fullName: c.fullName,
       description: c.description,
@@ -281,11 +312,15 @@ export function consolidateCandidates(
       topics: c.topics,
       pushedAt: c.pushedAt ?? undefined,
     });
-    const modelEvidence = c.modelStrings.reduce((s, id) => {
+    const evidenceWeight = (id: string, hard: boolean) => {
       const m = QUALIFYING_MODELS.find((x) => x.id === id);
-      return s + (m ? m.weight / 10 : 12 / 10);
-    }, 0);
-    c.evidence = c.modelStrings.length > 0 ? "hard" : c.via.includes("code") ? "soft" : "none";
+      const w = m ? m.weight / 10 : 12 / 10;
+      return hard ? w : w * 0.4; // ראיה רכה שווה פחות מחצי
+    };
+    const modelEvidence =
+      c.contentEvidence.reduce((s, id) => s + evidenceWeight(id, true), 0) +
+      c.textEvidence.reduce((s, id) => s + evidenceWeight(id, false), 0);
+    c.evidence = c.contentEvidence.length > 0 ? "hard" : c.via.includes("code") || c.textEvidence.length > 0 ? "soft" : "none";
     c.score = Math.round(
       modelEvidence * 6 + c.capabilityHits * 4 + listScore.score + Math.log10(c.stars + 1) * 4
     );
@@ -405,6 +440,12 @@ export interface CandidateFlat {
   pushedAt: string | null;
   topics: string[];
   modelStrings: string[];
+  /** מאומת: נמצא בתוכן קובץ אמיתי */
+  contentEvidence: string[];
+  /** רק אזכור בתיאור/topics/נתיב */
+  textEvidence: string[];
+  /** נתיבי קבצים אמיתיים לקרקע-אמת */
+  evidencePaths: string[];
   capabilityHits: number;
   evidence: Candidate["evidence"];
   score: number;
@@ -422,6 +463,9 @@ export function flattenForSwarm(candidates: Candidate[]): CandidateFlat[] {
       pushedAt: c.pushedAt,
       topics: c.topics.slice(0, 8),
       modelStrings: c.modelStrings,
+      contentEvidence: c.contentEvidence,
+      textEvidence: c.textEvidence,
+      evidencePaths: c.evidencePaths,
       capabilityHits: c.capabilityHits,
       evidence: c.evidence,
       score: c.score,

@@ -66,11 +66,19 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
 // ---------- עזרי דיוג ----------
 
 function candidateLine(c: CandidateFlat, i: number): string {
+  const provenance =
+    c.contentEvidence.length > 0
+      ? `קשה-מאומתת (המחרוזת בתוכן קובץ אמיתי: ${c.contentEvidence.join(", ")})`
+      : c.textEvidence.length > 0
+        ? `רכה בלבד (רק אזכור בתיאור/topics, לא הוכחה בקוד: ${c.textEvidence.join(", ")})`
+        : "חלשה (אזכור claude כללי)";
   return [
     `[${i}] ${c.fullName}`,
-    `⭐${c.stars} · דחיפה אחרונה: ${c.pushedAt?.slice(0, 10) ?? "??"} · ראיה: ${c.evidence}`,
+    `⭐${c.stars} · דחיפה אחרונה: ${c.pushedAt?.slice(0, 10) ?? "??"} · ראיה: ${provenance}`,
+    c.contentEvidence.length > 0 && c.evidencePaths.length > 0
+      ? `קבצי ראיה ממאגר אמיתי: ${c.evidencePaths.slice(0, 3).join(" | ")}`
+      : "",
     c.description ? `תיאור: ${c.description.slice(0, 200)}` : "תיאור: אין",
-    c.modelStrings.length ? `מחרוזות מודל מזכות שנתגלו: ${c.modelStrings.join(", ")}` : "ללא מחרוזות מודל 5.5+",
     c.capabilityHits ? `קבצי יכולת שנתגלו: ${c.capabilityHits}` : "",
     c.topics.length ? `topics: ${c.topics.join(", ")}` : "",
   ]
@@ -122,9 +130,12 @@ export async function triageBatch(batch: CandidateFlat[]): Promise<TriageVerdict
 
 ${list}
 
-בצע טריאז׳ה מודיעינית לכל מועמד. חשדן: ראיה ״hard״ = מחרוזת מודל 5.5+ נתגלתה בקוד/בקבצי יכולת — זו הראיה היחידה ל-elite. אזכור claude כללי בתיאור זה ראיה חלשה — לכל היותר watch. מאגר ללא ראיית מודל מזכה = noise.
+בצע טריאז׳ה מודיעינית לכל מועמד. חשדן מוחלט:
+— ראיה ״קשה-מאומתת״ = המחרוזת נמצאה בתוכן קובץ אמיתי — הראיה היחידה ל-elite.
+— ראיה ״רכה״ = אזכור בתיאור בלבד — אסור לתת elite, לכל היותר watch. אסור לומר שהשתמשו במודל בקוד.
+— בלי ראיה = noise.
 החזר JSON בדיוק:
-{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "נימוק קצר בעברית מהראיות"}]}`;
+{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "נימוק קצר בעברית המציין בדיוק מאיפה הראיה (תוכן קוד / תיאור)"}]}`;
   const j = await llmJson(prompt);
   return parseTriage(j, batch);
 }
