@@ -59,3 +59,11 @@ db/
 # runtime artifacts
 scripts/
 agent-ctx/
+.zscripts/
+tool-results/
+download/
+upload/
+tests/
+.verify-*.png
+*.pid
+nohup.out

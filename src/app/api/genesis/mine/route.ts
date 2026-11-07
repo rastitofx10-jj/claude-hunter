@@ -30,9 +30,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const pkg = await mineDna(owner, repo, token);
+    const warnings: string[] = [];
+    if (pkg.treeTruncated) {
+      warnings.push("עץ הקבצים של הריפו נחתך (מאגר ענק מאוד) — ייתכן שנמצאו רק חלק מקבצי היכולת");
+    }
     if (pkg.artifacts.length === 0) {
       return NextResponse.json({
         ...pkg,
+        warnings,
         note: "לא נמצאו קבצי יכולת Claude (.claude/, CLAUDE.md) בריפו הזה — ייתכן שהפרויקט לא נבנה עם Claude Code",
       });
     }
@@ -61,7 +66,7 @@ export async function POST(req: NextRequest) {
         },
       });
     }
-    return NextResponse.json(pkg);
+    return NextResponse.json({ ...pkg, warnings });
   } catch (e) {
     const msg = e instanceof GhError ? e.message : "הכרייה נכשלה";
     const status = e instanceof GhError ? e.status : 500;

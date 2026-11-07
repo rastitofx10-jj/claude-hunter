@@ -133,3 +133,22 @@ export function isPrismaNotFound(e: unknown): boolean {
     (e as { code?: unknown }).code === "P2025"
   );
 }
+
+/**
+ * סניטציה לשמות-קוד שמגיעים מה-AI לפני שהם נכנסים ל-DB או לנתיבים
+ * (`.claude/skills/<name>/SKILL.md`): רק a-z 0-9 מקף וקו תחתון.
+ * מונע רווחים, תווים עבריים, נטיות נתיב (../) ושמות ריקים.
+ */
+export function sanitizeSlug(raw: unknown, fallback: string, maxLen = 60): string {
+  const s = sanitizeSlugLoose(raw);
+  return (s || fallback).slice(0, maxLen);
+}
+
+/** גרסה ללא fallback — למקרים שרוצים לבדוק ריקות בעצמם */
+function sanitizeSlugLoose(raw: unknown): string {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return s
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}

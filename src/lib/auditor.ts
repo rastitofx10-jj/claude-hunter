@@ -9,9 +9,9 @@
 // צד שרת בלבד.
 // ============================================================
 
-import ZAI from "z-ai-web-dev-sdk";
 import { db } from "./db";
 import { extractJson, safeJsonParse, str, strArr, withTimeout } from "./ai-json";
+import { getZai } from "./zai";
 import { ghFetch, ghFetchRaw, GhError } from "./github";
 import { QUALIFYING_MODELS } from "./claude-models";
 import { resolveToken } from "./server-token";
@@ -73,7 +73,7 @@ const AUDITOR_ROLE = `אתה מבקר פנימי עוין (red-team) של יחי
 6. סלופ אמיתי = משפט גנרי שמתאים לכל פרויקט AI בלי פרט מזהה, או מספר/עובדה שלא קיימים בנתונים.`;
 
 async function llmJson(prompt: string): Promise<Record<string, unknown>> {
-  const zai = await ZAI.create();
+  const zai = await getZai();
   const completion = await withTimeout(
     zai.chat.completions.create({
       messages: [
@@ -219,7 +219,7 @@ export async function antiSlopAudit(
   const refuted = checks.filter((c) => !c.verified);
   const briefSample = JSON.stringify(briefing ?? {}).slice(0, 4500);
   const refutedList = refuted.length
-    ? refuted.map((r) => `— ${r.fullName}: נטען "${r.claim}" אך 0 קבצים במאגר מכילים אותה`).join("\n")
+    ? refuted.map((r) => `— ${r.fullName}: נטען "${r.claimed}" אך 0 קבצים במאגר מכילים אותה`).join("\n")
     : "(אף ראיה לא נסתרה בשלב הדטרמיניסטי)";
   const topFindings = findings
     .slice(0, 10)
@@ -229,7 +229,7 @@ export async function antiSlopAudit(
   const prompt = `ביקורת anti-slop על תדריך מודיעין שייצרה המערכת.
 
 1) תוצאות אימות חי (דטרמיניסטי) של ראיות ה-elite — הקרקע-אמת שאין לערער עליה:
-${checks.map((c) => `— ${c.fullName}: נטען "${c.claim}" → ${c.filesFound} קבצים נמצאו ${c.verified ? `✓ אומתה${c.proofFile ? ` (קובץ הוכחה: ${c.proofFile})` : ""}` : "✗ נסתרה"}`).join("\n")}
+${checks.map((c) => `— ${c.fullName}: נטען "${c.claimed}" → ${c.filesFound} קבצים נמצאו ${c.verified ? `✓ אומתה${c.proofFile ? ` (קובץ הוכחה: ${c.proofFile})` : ""}` : "✗ נסתרה"}`).join("\n")}
 
 2) ראיות שנסתרו:
 ${refutedList}

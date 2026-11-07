@@ -7,8 +7,8 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import ZAI from "z-ai-web-dev-sdk";
-import { AiJsonError, extractJson, isTimeoutError, str, strArr, withTimeout } from "./ai-json";
+import { AiJsonError, extractJson, isTimeoutError, sanitizeSlug, str, strArr, withTimeout } from "./ai-json";
+import { getZai } from "./zai";
 
 export class MissionError extends Error {
   constructor(message: string) {
@@ -211,8 +211,9 @@ ${brief}
 }
 החזר 3-5 שלבים ו-3-5 פרומפטים ברצף, בסדר ביצוע. בתוך paste מותר backticks — אסורה מרכאה כפולה.`;
 
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
+  let failureReason = "JSON";
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const completion = await withTimeout(
@@ -224,7 +225,7 @@ ${brief}
               content:
                 attempt === 0
                   ? prompt
-                  : prompt + "\n\n⚠️ התגובה הקודמת לא הייתה JSON תקין — קצר פלט, תקן מרכאות כפולות ופסיקים תלויים, והחזר JSON בלבד.",
+                  : prompt + `\n\n⚠️ הניסיון הקודם נכשל (${failureReason === "JSON" ? "JSON שבור" : "שלבים חסרים"}) — קצר פלט, החזר JSON תקין עם מערך phases מלא ולא ריק.`,
             },
           ],
           thinking: { type: "disabled" },
@@ -235,13 +236,15 @@ ${brief}
       const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new MissionError("ה-AI החזיר תשובה ריקה");
+        failureReason = "JSON";
         continue;
       }
       const j = extractJson(raw);
-      const missionName = str(j.missionName, "field-mission");
+      const missionName = sanitizeSlug(j.missionName, "field-mission");
       const phases = parsePhases(j.phases);
       if (phases.length === 0) {
         lastErr = new MissionError("ה-AI לא החזיר שלבים");
+        failureReason = "phases";
         continue;
       }
       return {
@@ -282,7 +285,7 @@ Requirements:
 - Minimum 35 lines of practical content, markdown only — no code fences around the whole file`;
 
   try {
-    const zai = await ZAI.create();
+    const zai = await getZai();
     const completion = await withTimeout(
       zai.chat.completions.create({
         messages: [
@@ -428,7 +431,7 @@ export async function distillFieldReport(input: {
 }
 אם ורק אם אין דבר להנציח: "newDna": null`;
 
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -537,7 +540,7 @@ ${dnaExcerpts || "(אין — הסתמך על ידע כללי ועל המטרה)
 
 Produce the real deliverable for THIS phase now.`;
 
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

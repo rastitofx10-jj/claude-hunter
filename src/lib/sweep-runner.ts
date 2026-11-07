@@ -23,6 +23,7 @@ import { parseAudit } from "./auditor";
 import type { NextRequest } from "next/server";
 
 const activeRuns = new Set<number>();
+let startingSweep = false; // נעילת-תחילה: סוגר את חלון המירוץ בין הבדיקה ליצירה (POST כפול = סריקה אחת)
 
 export function isRunActive(id: number): boolean {
   return activeRuns.has(id);
@@ -173,20 +174,32 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
   }
 }
 
-/** פתיחת ריצה חדשה ברקע — מחזיר מיד את המזהה */
+/** פתיחת ריצה חדשה ברקע — מחזיר מיד את המזהה. מוגן מפני תחרות POST כפול */
 export async function startSweep(req: NextRequest): Promise<{ id: number }> {
-  if (await hasActiveRun()) {
+  if (startingSweep || (await hasActiveRun())) {
     const err = new Error("סריקה כבר רצה כרגע — חכה לסיומה או בדוק את המצב");
     (err as Error & { status?: number }).status = 409;
     throw err;
   }
-  const token = await resolveToken(req);
-  const run = await db.sweepRun.create({
-    data: { status: "running", phase: "queries", progress: 0 },
-  });
-  // ריצה ברקע — בכוונה בלי await
-  void executeSweep(run.id, token);
-  return { id: run.id };
+  startingSweep = true;
+  try {
+    // בדיקה חוזרת אחרי תפיסת הנעילה — שני POST מקביליים: רק הראשון עובר
+    if (await hasActiveRun()) {
+      const err = new Error("סריקה כבר רצה כרגע — חכה לסיומה או בדוק את המצב");
+      (err as Error & { status?: number }).status = 409;
+      throw err;
+    }
+    const token = await resolveToken(req);
+    const run = await db.sweepRun.create({
+      data: { status: "running", phase: "queries", progress: 0 },
+    });
+    activeRuns.add(run.id); // נרשם לפני הריצה — hasActiveRun מזהה מיד
+    // ריצה ברקע — בכוונה בלי await
+    void executeSweep(run.id, token);
+    return { id: run.id };
+  } finally {
+    startingSweep = false;
+  }
 }
 
 /** פירוק שורת ריצה לתצוגה */
@@ -199,6 +212,7 @@ export function parseSweepRow(row: {
   stats: string | null;
   findings: string | null;
   briefing: string | null;
+  audit: string | null;
   error: string | null;
   createdAt: Date;
   updatedAt: Date;

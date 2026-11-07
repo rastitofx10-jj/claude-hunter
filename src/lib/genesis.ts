@@ -7,9 +7,9 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import ZAI from "z-ai-web-dev-sdk";
 import type { MinedArtifact } from "./dna-miner";
-import { extractJson, str, strArr, withTimeout } from "./ai-json";
+import { extractJson, isTimeoutError, sanitizeSlug, str, strArr, withTimeout } from "./ai-json";
+import { getZai } from "./zai";
 
 export class GenesisError extends Error {
   constructor(message: string) {
@@ -114,7 +114,7 @@ ${digest}
 }
 החזר 3-5 פקודות עבודה, ממוינות לפי ערך למוצר.`;
 
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -142,7 +142,7 @@ ${digest}
         continue;
       }
       return {
-        chimeraName: str(j.chimeraName, "elite-chimera"),
+        chimeraName: sanitizeSlug(j.chimeraName, "elite-chimera"),
         oneLiner: str(j.oneLiner),
         skillMd,
         principles: strArr(j.principles),
@@ -152,6 +152,7 @@ ${digest}
         generatedAt: new Date().toISOString(),
       };
     } catch (e) {
+      if (isTimeoutError(e)) throw e; // timeout — בלי ניסיון חוזר (עד 110 שניות בכל ניסיון)
       if (e instanceof GenesisError) {
         lastErr = e;
         continue;

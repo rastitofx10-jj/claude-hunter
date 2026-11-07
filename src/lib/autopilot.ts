@@ -59,10 +59,33 @@ export class AutopilotError extends Error {
 }
 
 /**
+ * נעילה פר-משימה בתהליך: שתי קריאות צעד מקבילות (דאבל-קליק / שני טאבים)
+ * בלי זה — שתיהן קוראות את אותו מצב ומבצעות את אותו שלב פעמיים
+ * (עבודת LLM כפולה ו-clobber של ה-state). עכשיו השנייה ממתינה ואז קוראת מצב טרי.
+ */
+const missionLocks = new Map<number, Promise<unknown>>();
+
+async function withMissionLock<T>(missionId: number, fn: () => Promise<T>): Promise<T> {
+  const prev = missionLocks.get(missionId) ?? Promise.resolve();
+  const gate = prev.catch(() => undefined).then(fn);
+  missionLocks.set(missionId, gate);
+  try {
+    return await gate;
+  } finally {
+    if (missionLocks.get(missionId) === gate) missionLocks.delete(missionId);
+  }
+}
+
+/**
  * הרצת השלב הבא שטרם בוצע במשימה + שמירה מיידית של התוצאה.
  * מחזיר מה בוצע (או איזה שלב נכשל), ואת המצב המלא אחרי השלב.
+ * מוגן בנעילה פר-משימה — קריאות מקבילות מתורגמות לרצף.
  */
-export async function runNextAutopilotPhase(missionId: number): Promise<NextPhaseResult> {
+export function runNextAutopilotPhase(missionId: number): Promise<NextPhaseResult> {
+  return withMissionLock(missionId, () => runNextAutopilotPhaseLocked(missionId));
+}
+
+async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhaseResult> {
   const mission = await db.mission.findUnique({ where: { id: missionId } });
   if (!mission) throw new AutopilotError("המשימה לא נמצאה", 404);
 

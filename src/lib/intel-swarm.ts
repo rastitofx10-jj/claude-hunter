@@ -6,8 +6,8 @@
 // כל פרומפט מחזיר JSON קפדני עם שרשרת תיקון. צד שרת בלבד.
 // ============================================================
 
-import ZAI from "z-ai-web-dev-sdk";
-import { extractJson, str, strArr, withTimeout } from "./ai-json";
+import { extractJson, isTimeoutError, str, strArr, withTimeout } from "./ai-json";
+import { getZai } from "./zai";
 import type { CandidateFlat } from "./deep-sweep";
 
 export class SwarmError extends Error {
@@ -30,7 +30,7 @@ const SWARM_ROLE = `אתה קצין מודיעין בכיר ביחידת ציי�
 const RETRY_HINT = `\n\n⚠️ תיקון: התשובה הקודמת לא הייתה JSON תקין. החזר את אותו תוכן ב-JSON מהודק — בלי מרכאות כפולות בערכים, בלי פסיקים תלויים, גוף ה-JSON בלבד.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -53,6 +53,7 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
       }
       return extractJson(raw, SwarmError);
     } catch (e) {
+      if (isTimeoutError(e)) throw e; // timeout — בלי retry, 8+ פרומפטים × 110 שניות = מלכודת
       if (e instanceof SwarmError) {
         lastErr = e;
         continue;

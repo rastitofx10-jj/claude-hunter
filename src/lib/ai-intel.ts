@@ -4,8 +4,8 @@
 // פועל בצד שרת בלבד (z-ai-web-dev-sdk אסור בצד לקוח).
 // ============================================================
 
-import ZAI from "z-ai-web-dev-sdk";
-import { extractJson, str, strArr, withTimeout } from "./ai-json";
+import { extractJson, isTimeoutError, str, strArr, withTimeout } from "./ai-json";
+import { getZai } from "./zai";
 import type {
   AnalyzeResponse,
   BattleSynthesis,
@@ -104,7 +104,7 @@ const RETRY_HINT = `\n\n⚠️ תיקון חוזר: התגובה הקודמת ש
 - החזר את גוף ה-JSON בלבד, שום טקסט אחר.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
-  const zai = await ZAI.create();
+  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -127,11 +127,12 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
       }
       return extractJson(raw, IntelError);
     } catch (e) {
+      if (isTimeoutError(e)) throw e; // timeout — ניסיון חוזר יבזבז עוד 110 שניות
       if (e instanceof IntelError) {
         lastErr = e;
         continue; // parse failure → retry with repair hint
       }
-      throw e; // timeout / network — no point retrying within same request
+      throw e; // network — no point retrying within same request
     }
   }
   throw lastErr instanceof Error ? lastErr : new IntelError("יצירת הדוח נכשלה");

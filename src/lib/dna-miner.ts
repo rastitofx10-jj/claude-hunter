@@ -22,6 +22,8 @@ export interface DnaPackage {
   defaultBranch: string;
   artifacts: MinedArtifact[];
   scannedAt: string;
+  /** true אם עץ הקבצים נחתך (ריפו ענק) — הכרייה הייתה חלקית בשקט; עכשיו מדווח */
+  treeTruncated: boolean;
 }
 
 interface GhTree {
@@ -36,8 +38,9 @@ function classify(path: string): MinedArtifact["kind"] | null {
   const p = path.toLowerCase();
   if (p === "claude.md") return "claude-md";
   if (p === "agents.md") return "agents-md";
-  // SKILL.md בכל מיקום — כולל ריפואי סקילים רשמיים (skills/<cat>/<name>/SKILL.md)
-  if (/skill\.md$/.test(p) && p.includes("skill")) return "skill";
+  // SKILL.md בדיוק (בכל עומק תיקייה) — בעבר p.includes("skill") סיווג בטעות
+  // גם קבצים כמו docs/my-skill.md כסקיל; עכשיו רק שם-קובץ skill.md בדיוק.
+  if (/(^|\/)skill\.md$/.test(p)) return "skill";
   if (p.includes(".claude/commands/") && /\.md$/.test(p)) return "command";
   if (p.includes(".claude/agents/") && /\.md$/.test(p)) return "agent";
   if (p.includes(".mcp.json") || p.includes("mcp_config")) return "mcp-config";
@@ -134,7 +137,7 @@ export async function mineDna(
     .filter((r): r is PromiseFulfilledResult<MinedArtifact> => r.status === "fulfilled")
     .map((r) => r.value);
 
-  return { repo: full, defaultBranch: branch, artifacts, scannedAt: new Date().toISOString() };
+  return { repo: full, defaultBranch: branch, artifacts, scannedAt: new Date().toISOString(), treeTruncated: tree.truncated === true };
 }
 
 function rank(kind: MinedArtifact["kind"]): number {

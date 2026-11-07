@@ -450,7 +450,7 @@ export function SweepPanel() {
                               <span dir="ltr" className="block truncate text-right font-mono text-xs">{c.fullName}</span>
                             </td>
                             <td className="p-2 font-mono text-xs" dir="ltr">
-                              {c.claim}
+                              {c.claimed}
                               {c.proofFile && (
                                 <span dir="ltr" className="block truncate text-right text-[10px] text-emerald-600">📄 {c.proofFile}</span>
                               )}

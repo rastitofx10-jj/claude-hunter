@@ -10,24 +10,56 @@ export const dynamic = "force-dynamic";
  */
 const PREVIEW_CHARS = 400;
 
+/**
+ * מצב ברירת המחדל (בלי full) — בעבר: findMany עם content מלא מה-DB
+ * ואז content=null וניפוח preview בצד השרת — מגה-בייטים מועברים מ-SQLite
+ * רק כדי להיזרק. עכשיו: substr בתוך ה-SQL — מהתהליך יוצא רק ה-400 תווים.
+ */
+async function listLight() {
+  const rows = await db.$queryRaw<{
+    id: number;
+    sourceRepo: string;
+    path: string;
+    kind: string;
+    name: string;
+    description: string | null;
+    rawUrl: string | null;
+    size: number;
+    contentPreview: string | null;
+    contentLength: number;
+  }[]>`
+    SELECT id, sourceRepo, path, kind, name, description, rawUrl, size,
+           substr(content, 1, ${PREVIEW_CHARS + 1}) AS contentPreview,
+           length(content) AS contentLength
+    FROM DnaArtifact
+    ORDER BY sourceRepo ASC, kind ASC, name ASC
+  `;
+  return rows.map((r) => ({
+    id: r.id,
+    sourceRepo: r.sourceRepo,
+    path: r.path,
+    kind: r.kind,
+    name: r.name,
+    description: r.description,
+    rawUrl: r.rawUrl,
+    size: r.size,
+    content: null,
+    contentPreview: r.contentPreview ?? "",
+    hasContent: (r.contentLength ?? 0) > 0,
+  }));
+}
+
 export async function GET(req: NextRequest) {
   const full = req.nextUrl.searchParams.get("full") === "1";
   try {
+    if (!full) {
+      const items = await listLight();
+      return NextResponse.json({ items, full: false });
+    }
     const rows = await db.dnaArtifact.findMany({
       orderBy: [{ sourceRepo: "asc" }, { kind: "asc" }, { name: "asc" }],
-      ...(full
-        ? {}
-        : { select: { id: true, sourceRepo: true, path: true, kind: true, name: true, description: true, rawUrl: true, size: true, content: true } }),
     });
-    const items = full
-      ? rows
-      : rows.map((r) => ({
-          ...r,
-          content: null,
-          contentPreview: (r.content ?? "").slice(0, PREVIEW_CHARS),
-          hasContent: (r.content ?? "").length > 0,
-        }));
-    return NextResponse.json({ items, full });
+    return NextResponse.json({ items: rows, full: true });
   } catch {
     return NextResponse.json({ error: "טעינת ספריית ה-DNA נכשלה" }, { status: 500 });
   }

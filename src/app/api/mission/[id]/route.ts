@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { buildMissionBundle, type CompiledMission } from "@/lib/mission-compiler";
-import { safeJsonParse } from "@/lib/ai-json";
+import { isPrismaNotFound, safeJsonParse } from "@/lib/ai-json";
 import { parseAutopilotState } from "@/lib/autopilot";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +78,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   }
 }
 
-/** עדכון סטטוס ביצוע */
+/** עדכון סטטוס ביצוע — update ישיר, P2025 → 404 (בלי חלון TOCTOU של find-then-update) */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
@@ -89,16 +89,17 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (!Number.isInteger(numId) || !allowed.has(status)) {
       return NextResponse.json({ error: "סטטוס לא תקין" }, { status: 400 });
     }
-    const exists = await db.mission.findUnique({ where: { id: numId }, select: { id: true } });
-    if (!exists) return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
     const m = await db.mission.update({ where: { id: numId }, data: { status } });
     return NextResponse.json({ id: m.id, status: m.status });
-  } catch {
+  } catch (e) {
+    if (isPrismaNotFound(e)) {
+      return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
+    }
     return NextResponse.json({ error: "עדכון הסטטוס נכשל" }, { status: 500 });
   }
 }
 
-/** מחיקת משימה */
+/** מחיקת משימה — delete ישיר, P2025 → 404 (בלי חלון TOCTOU) */
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
@@ -106,11 +107,12 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     return NextResponse.json({ error: "מזהה לא תקין" }, { status: 400 });
   }
   try {
-    const exists = await db.mission.findUnique({ where: { id: numId }, select: { id: true } });
-    if (!exists) return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
     await db.mission.delete({ where: { id: numId } });
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (e) {
+    if (isPrismaNotFound(e)) {
+      return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
+    }
     return NextResponse.json({ error: "מחיקת המשימה נכשלה" }, { status: 500 });
   }
 }
