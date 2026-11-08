@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-type TabKey = "search" | "watchlist" | "sweep" | "history" | "genesis" | "mission";
+type TabKey = "search" | "watchlist" | "sweep" | "history" | "genesis" | "mission" | "live";
 
 interface HunterState {
   token: string;

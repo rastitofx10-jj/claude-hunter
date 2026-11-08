@@ -18,6 +18,7 @@ import { WatchlistPanel } from "@/components/hunter/watchlist-panel";
 import { GenesisPanel } from "@/components/hunter/genesis-panel";
 import { MissionControlPanel } from "@/components/hunter/mission-control";
 import { SweepPanel } from "@/components/hunter/sweep-panel";
+import { LiveHuntPanel } from "@/components/hunter/live-hunt-panel";
 import { HistoryPanel } from "@/components/hunter/history-panel";
 import { RateChip } from "@/components/hunter/rate-chip";
 import { TokenBanner } from "@/components/hunter/token-banner";
@@ -27,7 +28,7 @@ const QUICK_REPOS: { label: string; fullName: string }[] = [
   { label: "📚 public-apis/public-apis", fullName: "public-apis/public-apis" },
 ];
 
-type TabKeyUnion = "search" | "watchlist" | "sweep" | "history" | "genesis" | "mission";
+type TabKeyUnion = "search" | "watchlist" | "sweep" | "history" | "genesis" | "mission" | "live";
 
 export default function ClaudeHunterPage() {
   const token = useHunterStore((s) => s.token);
@@ -189,7 +190,7 @@ export default function ClaudeHunterPage() {
         </section>
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabKeyUnion)}>
-          <TabsList className="mb-4 grid w-full max-w-4xl grid-cols-3 sm:grid-cols-6">
+          <TabsList className="mb-4 grid w-full max-w-4xl grid-cols-4 sm:grid-cols-7">
             <TabsTrigger value="search">🔍 חיפוש</TabsTrigger>
             <TabsTrigger value="watchlist">
               ⭐ נשמרים {(watchData?.items.length ?? 0) > 0 && <span className="mr-1 rounded-full bg-orange-100 px-1.5 text-xs text-orange-700">{watchData!.items.length}</span>}
@@ -198,6 +199,7 @@ export default function ClaudeHunterPage() {
             <TabsTrigger value="history">🕒 היסטוריה</TabsTrigger>
             <TabsTrigger value="genesis">🧬 Genesis</TabsTrigger>
             <TabsTrigger value="mission">🎯 מבצעים</TabsTrigger>
+            <TabsTrigger value="live">⚔️ ציד חי</TabsTrigger>
           </TabsList>
 
           <TabsContent value="search" className="space-y-5">
@@ -280,6 +282,10 @@ export default function ClaudeHunterPage() {
 
           <TabsContent value="mission">
             <MissionControlPanel />
+          </TabsContent>
+
+          <TabsContent value="live">
+            <LiveHuntPanel />
           </TabsContent>
         </Tabs>
       </main>

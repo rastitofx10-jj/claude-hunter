@@ -108,3 +108,25 @@ model SweepRun {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
+
+// ============================================================
+// ציד חי — שרשרת הרג אוטונומית מלאה בלחיצה אחת:
+// איתור GitHub חי ← להקת פרומפטים ← כריית DNA ← הידור משימה
+// ← ביצוע אוטונומי ← זיקוק שדה (הספרייה גדלה) ← מסקנת מערכה.
+// שלב אחד לכל קריאה — מצב נשמר ב-DB, ניתן לחזור מכל נקודה.
+// ============================================================
+model LiveHunt {
+  id        Int       @id @default(autoincrement())
+  status    String    @default("running") // running | done | failed
+  stageKey  String    @default("hunt") // hunt | swarm | mine | compile | execute | grow | verdict
+  stages    String    @default("[]") // JSON: רשומות שלבים שהושלמו [{key,title,summary,ms,evidence}]
+  goal      String    @default("") // המטרה שנגזרה אוטומטית מהממצאים (מתמלאת בשלב ההידור)
+  missionId Int? // המשימה שנוצרה בשלב ההידור
+  dnaBefore Int       @default(0) // גודל הספרייה בפתיחה — להוכחת צמיחה
+  dnaAfter  Int       @default(0) // גודל הספרייה בסיום
+  llmCalls  Int       @default(0) // סך קריאות LLM בשרשרת
+  elapsedMs Int       @default(0) // זמן מצטבר של השלבים
+  error     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}

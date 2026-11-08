@@ -16,6 +16,23 @@
 | **ביקורת אדברסרית** | המערכת בודקת את עצמה: אימות חי של ראיות elite מול המאגרים עצמם (code search + grep גולמי לקרקע-אמת), ופרומפט anti-slop שמחייב ציטוט מדויק |
 | **Genesis** | כריית DNA: SKILL.md, פקודות, סוכנים ו-CLAUDE.md מריפואי אליטה → ספריית יכולות ניידת; מיזוג כימרה (best-of-breed) + פקודות עבודה מוכנות |
 | **Mission Control** | מטרה בשפה טבעית → תוכנית קרב + רצף פרומפטים + SKILL.md, עם בחירת DNA אוטומטית; טייס אוטומטי שלב-אחר-שלב (resumable, נעול מפני תחרות); דיווח שדה → זיקוק AI → **לידת DNA חדש** שנבחר כבר במשימה הבאה |
+| **⚔️ ציד חי (Live Hunt)** | שרשרת הרג אוטונומית מלאה בלחיצה אחת: GitHub חי ← להקת פרומפטים ← כריית DNA ← הידור משימה מהגנים החדשים ← ביצוע אוטונומי ← זיקוק שדה ← מסקנת מערכה עם ראיות. שלב אחד לכל פעימה, מצב נשמר ב-DB, resumable מכל נקודה |
+
+## ⚔️ ציד חי — שרשרת ההרג האוטונומית
+
+```
+hunt      26 שאילתות GitHub חיות עם הטוקן השמור → מועמדים מדורגים (סף 5.5+ נאכף בקוד)
+swarm     טריאז׳ה LLM ל-12 המובילים + פרופילי השקעה לאליטה
+attack    דפוסי שוק + תוכנית תקיפה + אבולוציית שאילתות + תדריך מנהלים
+mine      כריית DNA חיה מ-3 המטרות המובילות → גנים חדשים בספרייה
+compile   גזירת מטרה אוטומטית מתוכנית התקיפה → הידור משימה מהספרייה המוגדלת
+execute   טייס אוטומטי — שלב משימה אחד לכל פעימה, עד סיום כולם
+grow      זיקוק שדה ב-AI → לידת גן חדש (field:livehunt-<id>)
+verdict   מסקנת מערכה: הצמיחה מוכחת במספרים + ראיות מלאות לכל שלב
+```
+
+ריצה מאומתת אנד-טו-אנד (ציד #1): 26 שאילתות · 1,563 מועמדים (974 ראיה קשה) · 12 אליטה · 9 גנים נכרו
+· משימה #5 הודרה ובוצעה 4/4 שלבים · 14 קריאות LLM · 10 גנים נוספו (94→104) · 7:20 דקות.
 
 ## לולאת האבולוציה
 
@@ -31,7 +48,7 @@
 ## סטאק
 
 - **Next.js 16** (App Router) + TypeScript 5
-- **Prisma + SQLite** — Mission, DnaArtifact, SweepRun, Chimera, SavedRepo, SearchHistory
+- **Prisma + SQLite** — Mission, DnaArtifact, SweepRun, LiveHunt, Chimera, SavedRepo, SearchHistory
 - **Tailwind CSS 4 + shadcn/ui** — RTL מלא, כהה/בהיר
 - **z-ai-web-dev-sdk** — שכבת LLM בצד שרת בלבד (מנוע JSON עם שרשרת תיקון 4-שלבית + timeout ללא retry)
 - **GitHub REST** — קצב מבוקש למכסות, backoff אקספוננציאלי, העשרה במקביל מרוסן
@@ -57,6 +74,7 @@ bun run dev
 | `GET /api/dna-library` (`?full=1`, `?repo=`) · `GET /api/dna-library/[id]` | ספריית ה-DNA (מצב קל = substr ב-SQL) |
 | `POST /api/genesis/mine` · `POST /api/genesis/synthesize` · `GET /api/genesis/chimeras` | כרייה, כימרה, היסטוריה |
 | `GET/POST /api/mission` · `GET/PATCH/DELETE /api/mission/[id]` · `POST /api/mission/[id]/autopilot[/step]` · `POST /api/mission/report` | Mission Control מלא |
+| `GET/POST /api/live-hunt` | ציד חי: `start` / `next` (שלב אחד לקריאה) / `retry` · `GET ?id=N` למצב מלא |
 | `GET/DELETE /api/settings/token` | ניהול טוקן (מוסכם) |
 | `GET /api/export/pack` | קודקס ה-DNA — Markdown אחד להזרקה בכל פרויקט |
 

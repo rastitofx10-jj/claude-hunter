@@ -28,3 +28,4 @@ agent-ctx/
 .idea/
 .vscode/
 tsconfig.tsbuildinfo
+evidence-*.png
