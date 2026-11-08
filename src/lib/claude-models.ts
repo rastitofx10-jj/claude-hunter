@@ -183,6 +183,10 @@ export function detectClaudeModels(text: string): ModelDetection {
   };
 
   const handle = (family: ModelFamily, maj: number, min: number | null) => {
+    // סניטציה נגד פוזיבים: מספרי גרסה סבירים בלבד — maj 1-9, min 0-9.
+    // "opus 45" / "sonnet 4.25" מהפרוזה לא ייחשבו עוד גרסה (מונע עבירת סף שגויה).
+    if (!Number.isInteger(maj) || maj < 1 || maj > 9) return;
+    if (min != null && (!Number.isInteger(min) || min < 0 || min > 9)) return;
     const v = fmtVersion(maj, min);
     const id = buildId(family, maj, min);
     const { qualifying: ok } = classifyVersion(v, family);
@@ -191,11 +195,15 @@ export function detectClaudeModels(text: string): ModelDetection {
   };
 
   // claude-opus-4-5 / claude_opus_5_5 / claude opus 4.5 / claude-opus-4-5-20251101
-  const re1 = /claude[-_ ]?(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?:[-_. ](\d{1,2}))?/gi;
+  // maj: (\d{1,2}) + (?!\d) — כדי ש-"opus 45" לא ייתפס כגרסה 45
+  const re1 = /claude[-_ ]?(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // claude-3-5-sonnet / claude-3-7-sonnet-20250219 / claude-5-5
-  const re2 = /claude[-_ ](\d{1,2})[-_. ](\d{1,2})(?:[-_ ]?(opus|sonnet|haiku|fable))?/gi;
-  // opus 5.5 / opus-5.5 / sonnet-4-5 (גם ללא קידומת claude)
-  const re3 = /\b(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?:[-_. ](\d{1,2}))?(?!\d)/gi;
+  const re2 = /claude[-_ ](\d{1,2})(?!\d)[-_. ](\d{1,2})(?!\d)(?:[-_ ]?(opus|sonnet|haiku|fable))?/gi;
+  // opus 5.5 / opus-5.5 / sonnet-4-5 (גם ללא קידומת claude) — כולל פסיק עשרוני "opus 5,5"
+  const re3 = /\b(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
+  // claude-5 / claude 6 — אזכור מודל בלי משפחה ובלי מינור.
+  // חוק ברזל: אזכור ללא מינור = maj.0 → "claude 5" נחסם (5.0 < 5.5), "claude 6" מזכה (6.0 ≥ 5.5).
+  const re4 = /claude[-_ ](\d{1,2})(?!\d)/gi;
 
   let m: RegExpExecArray | null;
   while ((m = re1.exec(lower))) handle(m[1] as ModelFamily, Number(m[2]), m[3] != null ? Number(m[3]) : null);
@@ -204,9 +212,15 @@ export function detectClaudeModels(text: string): ModelDetection {
     handle(fam, Number(m[1]), Number(m[2]));
   }
   while ((m = re3.exec(lower))) handle(m[1] as ModelFamily, Number(m[2]), m[3] != null ? Number(m[3]) : null);
+  while ((m = re4.exec(lower))) handle("generic", Number(m[1]), null);
 
-  // fable עומד לבדו — מזכה רק כשיש הקשר Claude/Anthropic באותו טקסט (מניעת פוזיבים)
-  if (/\bfable\b/.test(lower) && /(claude|anthropic)/.test(lower)) {
+  // fable עומד לבדו — מזכה רק עם הקשר מודל מפורש (מניעת פוזיבים).
+  // נוסחאות מחמירות: "claude fable" / "claude-fable" / "anthropic's fable" /
+  // "fable model" — אבל לא כל סיפור פבל שמזכיר את Claude (פוזיב קריטי שתוקן).
+  if (
+    /\b(?:claude|anthropic)[^\w]{0,3}fable\b/.test(lower) ||
+    /\bfable[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower)
+  ) {
     addQual("claude-fable", "fable", 5.5);
   }
 

@@ -18,7 +18,7 @@ interface WatchBody {
 
 export async function GET() {
   try {
-    const items = await db.savedRepo.findMany({ orderBy: { createdAt: "desc" } });
+    const items = await db.savedRepo.findMany({ orderBy: { createdAt: "desc" }, take: 200 });
     return NextResponse.json({ items });
   } catch (e) {
     console.error("watchlist GET failed", e);
@@ -32,14 +32,18 @@ export async function POST(req: NextRequest) {
     if (!b.fullName || !b.owner || !b.name || !b.url) {
       return NextResponse.json({ error: "חסרים שדות חובה (fullName/owner/name/url)" }, { status: 400 });
     }
+    // עדכון סלקטיבי: שדה שלא נשלח על ידי הלקוח לא נדרס ב-DB.
+    // (בעבר: saveNote שלח רק notes → מחק בשקט models/evidence; saveFromScored שלח
+    // models: null → מחק את המודלים שזוהו. עכשיו כל שדה שאינו קיים בגוף נשמר כפי שהוא.)
     const item = await db.savedRepo.upsert({
       where: { fullName: b.fullName },
       update: {
-        stars: b.stars ?? 0,
-        score: b.score ?? 0,
-        description: b.description ?? null,
-        models: b.models ?? null,
-        evidence: b.evidence ?? null,
+        ...(b.stars !== undefined ? { stars: b.stars ?? 0 } : {}),
+        ...(b.score !== undefined ? { score: b.score ?? 0 } : {}),
+        ...(b.description !== undefined ? { description: b.description ?? null } : {}),
+        ...(b.models !== undefined ? { models: b.models ?? null } : {}),
+        ...(b.evidence !== undefined ? { evidence: b.evidence ?? null } : {}),
+        ...(b.notes !== undefined ? { notes: b.notes ?? null } : {}),
       },
       create: {
         fullName: b.fullName,

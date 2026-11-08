@@ -32,10 +32,19 @@ export interface NextPhaseResult {
   state: AutopilotState;
 }
 
-/** טעינת מצב טייס סלחנית — תומך גם בפורמט ההיסטורי (failures כמחרוזות) */
+/** טעינת מצב טייס סלחנית — תומך גם בפורמט ההיסטורי (failures כמחרוזות).
+ * deliverable מובטח כמחרוזת — שורות היסטוריות בלי deliverable לא מפילות את ה-UI
+ * (בעבר: s.deliverable.length קרס על undefined). */
 export function parseAutopilotState(raw: string | null): AutopilotState {
   const parsed = safeJsonParse<{ steps?: AutopilotStep[]; failures?: (AutopilotFailure | string)[] }>(raw, {});
-  const steps = Array.isArray(parsed.steps) ? parsed.steps.filter((s) => s && typeof s.phaseIndex === "number") : [];
+  const steps = (Array.isArray(parsed.steps) ? parsed.steps : [])
+    .filter((s) => s && typeof s.phaseIndex === "number")
+    .map((s) => ({
+      phaseIndex: s.phaseIndex,
+      title: typeof s.title === "string" ? s.title : `שלב ${s.phaseIndex + 1}`,
+      deliverable: typeof s.deliverable === "string" ? s.deliverable : "",
+      executedAt: typeof s.executedAt === "string" ? s.executedAt : new Date(0).toISOString(),
+    }));
   const failures = (Array.isArray(parsed.failures) ? parsed.failures : [])
     .map((f) => {
       if (typeof f === "string") {
@@ -89,8 +98,11 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   const mission = await db.mission.findUnique({ where: { id: missionId } });
   if (!mission) throw new AutopilotError("המשימה לא נמצאה", 404);
 
-  const plan = safeJsonParse<{ phases?: MissionPhase[] }>(mission.plan, {});
-  const phases = (plan.phases ?? []).filter((p) => p && typeof p.title === "string");
+  const planRaw = safeJsonParse<{ phases?: MissionPhase[] } | null>(mission.plan, null);
+  const plan = planRaw ?? {}; // "null" ב-DB → null → נגן נגד crash
+  const phases = (Array.isArray(plan.phases) ? plan.phases : []).filter(
+    (p) => p && typeof p.title === "string"
+  );
   if (phases.length === 0) throw new AutopilotError("למשימה אין שלבים לביצוע", 400);
 
   const state = parseAutopilotState(mission.autopilot);
@@ -158,9 +170,14 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   const nowFailed = new Set(newState.failures.map((f) => f.phaseIndex));
   const allDone = phases.every((_, i) => nowExecuted.has(i) || nowFailed.has(i));
 
-  // סטטוס: כשלים מלאים = failed; אחרת נשאר in_progress עד דיווח השדה
-  const status =
+  // סטטוס: כשלים מלאים = failed; אחרת נשאר in_progress עד דיווח השדה.
+  // חוק מעבר חד-כיווני: partial/done לא מדורגים אחורה ל-in_progress
+  // (בעבר: ריצת טייס מחדש על משימה חלקית/גמורה דרכה אחורה)
+  const computed =
     allDone && newState.steps.length === 0 && newState.failures.length > 0 ? "failed" : "in_progress";
+  const STATUS_RANK: Record<string, number> = { compiled: 0, in_progress: 1, partial: 2, done: 3, failed: 1 };
+  const status =
+    (STATUS_RANK[computed] ?? 1) >= (STATUS_RANK[mission.status] ?? 0) ? computed : mission.status;
 
   await db.mission.update({
     where: { id: missionId },

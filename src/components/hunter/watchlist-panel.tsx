@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "@/hooks/use-toast";
 import { BookmarkX, ExternalLink, Loader2, NotebookPen, Search, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ export function WatchlistPanel({
   const del = useMutation({
     mutationFn: (id: number) => apiFetch(`/api/watchlist?id=${id}`, token, { method: "DELETE" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["watchlist"] }),
+    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
   });
   const saveNote = useMutation({
     mutationFn: (w: WatchItem) =>
@@ -45,6 +47,7 @@ export function WatchlistPanel({
       setEditing(null);
       void qc.invalidateQueries({ queryKey: ["watchlist"] });
     },
+    onError: (e: Error) => toast({ title: "שמירת ההערה נכשלה", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) {

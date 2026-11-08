@@ -107,14 +107,16 @@ export async function GET(req: NextRequest) {
     }
 
     // ---------- sequential content fetcher (avoids secondary rate limits) ----------
+    // ghFetchRaw ולא ghFetch — ghFetch מפעיל res.json() על קבצים גלמיים:
+    // markdown זרק SyntaxError → null, ו-JSON התרגם ל-"[object Object]".
+    // זה הרג את כל זיהוי המודלים-מתוכן (CLAUDE.md/settings/package.json) לחלוטין.
     const fetchRaw = async (path: string): Promise<string | null> => {
       try {
-        const raw = await ghFetch<string>(
+        const raw = await ghFetchRaw(
           `/repos/${full}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(meta.default_branch)}`,
-          token,
-          "application/vnd.github.raw"
+          token
         );
-        return String(raw).slice(0, 12000);
+        return raw.slice(0, 12000);
       } catch {
         return null;
       }
@@ -263,8 +265,9 @@ export async function GET(req: NextRequest) {
     };
 
     if (token) {
-      // רק מודלים מזכים (5.5+) — משפחת 4.x לא נסרקת ולא נחשבת כלל
-      const kws: [string, string, number][] = QUALIFYING_MODELS.slice(0, 4).map((m) => [
+      // רק מודלים מזכים (5.5+) — משפחת 4.x לא נסרקת ולא נחשבת כלל.
+      // כל הרישום (6 מודלים) — בעבר slice(0,4) השמיט Opus 6.5/7 לחלוטין.
+      const kws: [string, string, number][] = QUALIFYING_MODELS.map((m) => [
         m.searchStrings[0],
         m.label,
         m.weight,
@@ -283,6 +286,8 @@ export async function GET(req: NextRequest) {
           }
           // 422 = qualifier problem etc — continue silently
         }
+        // מרווח קצר בין שאילתות קוד — מכסת code-search אגרסיבית (10 לדקה)
+        await new Promise((r) => setTimeout(r, 1500));
       }
     } else {
       warnings.push("ללא טוקן לא מבוצע חיפוש קוד פנימי-מאגרי (רק סריקת קבצים מטא-נתונים)");
@@ -315,9 +320,13 @@ export async function GET(req: NextRequest) {
       satScore(meta.stargazers_count, 15, 10000) + satScore(meta.forks_count, 5, 1000) + satScore(contributors, 5, 30)
     );
     const usageScore = Math.min(15, priceMentions.length * 3 + tokenMentions.length * 2 + Math.min(claudeCodeMentions, 4) + (builtWithClaude ? 3 : 0));
-    const total = Math.max(0, Math.min(100, modelScore + paidScore + tractionScore + usageScore));
-    const tier = tierOf(total);
+    // חוק הסף — רק ריפו שמוכיח 5.5+ יכול להגיע לטירות הפרימיום (זהב/אליטה):
+    // בלי מודל מזכה הציון מוגבל ל-35 (מתחת לכסף) — ריפו עם רק 4.x לא יכול להיראות "זהב"
+    // (בעבר: paid+traction+usage הגיעו ל-70/100 על ריפו של 4.x בלבד)
     const meetsModelThreshold = qualifyingList.length > 0;
+    const rawTotal = Math.max(0, modelScore + paidScore + tractionScore + usageScore);
+    const total = Math.min(100, meetsModelThreshold ? rawTotal : Math.min(rawTotal, 35));
+    const tier = tierOf(total);
 
     // ---------- languages ----------
     const langTotal = Object.values(languages).reduce((s, v) => s + v, 0) || 1;
@@ -335,6 +344,8 @@ export async function GET(req: NextRequest) {
           ? `⛔ לא עומד בסף: זוהו רק מודלים חסומים (${blockedList.map((b) => b.label).join(", ")}) — הקריטריון מחייב 5.5 ומעלה (Opus 5.5, Fable, Opus 6+)`
           : `⛔ לא עומד בסף: לא זוהה אף מודל 5.5+ — הקריטריון מחייב Opus 5.5, Fable או חדש יותר`
       );
+      // שקיפות: מה בדיוק חתך את הציון
+      insights.push(`ציון גולמי ${rawTotal} חתוך ל-${total} — בלי הוכחת מודל 5.5+ לא מוענקות טירות פרימיום`);
     } else {
       insights.push(`✅ עומד בסף המודלים (5.5+): ${qualifyingList.map((m) => m.label).join(", ")}${blockedList.length > 0 ? ` — וגם אזכורים חסומים של ${blockedList.map((b) => b.label).join(", ")} (לא נחשבים)` : ""}`);
     }

@@ -348,7 +348,7 @@ export function SweepPanel() {
                 <p className="mb-1 flex items-center gap-1.5 text-sm font-bold text-orange-800 dark:text-orange-200">
                   <Crosshair className="h-4 w-4" aria-hidden /> {briefing.brief.headline}
                 </p>
-                {briefing.brief.keyIntel.length > 0 && (
+                {(briefing.brief.keyIntel?.length ?? 0) > 0 && (
                   <ul className="mt-2 space-y-1 text-sm leading-relaxed">
                     {briefing.brief.keyIntel.map((k, i) => (
                       <li key={i} className="flex gap-1.5">
@@ -635,6 +635,14 @@ export function SweepPanel() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* שגיאת טעינה — בעבר: 500 שקט מהשרת לא היה נראה כלל בממשק */}
+      {(listQuery.isError || detailQuery.isError) && (
+        <div className="rounded-lg border border-red-200 bg-red-50/60 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/20 dark:text-red-300" role="alert">
+          <AlertTriangle className="mr-1 inline h-4 w-4" aria-hidden />
+          טעינת נתוני הסריקה נכשלה: {((listQuery.error as Error)?.message || (detailQuery.error as Error)?.message || "שגיאת רשת")}
+        </div>
       )}
 
       {/* היסטוריית סריקות */}

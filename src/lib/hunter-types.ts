@@ -66,6 +66,10 @@ export interface SearchResponse {
   querySent: string;
   /** מספר מאגרים שהוסתרו כי זוהו בהם רק מודלי 4.x ומטה (חוק החסימה המלאה) */
   blockedHidden?: number;
+  /** false במצב קוד — GitHub code search לא מאפשר עימוד אמיתי (100 תוצאות לשאילתה) */
+  canPaginate?: boolean;
+  /** אינדקס החיפוש חלקי לשאילתה (incomplete_results=true מ-GitHub) */
+  incompleteResults?: boolean;
 }
 
 export interface ModelHit {

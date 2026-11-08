@@ -33,9 +33,11 @@ export async function ghFetch<T = unknown>(
   accept?: string
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${GH_API}${path}`;
+  // timeout נגד חיבורים תלויים — בעבר: sweep/audit נתקעו לנצח על TCP מת
   const res = await fetch(url, {
     headers: ghHeaders(token, accept),
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     let msg = `GitHub API error ${res.status}`;
@@ -69,6 +71,7 @@ export async function ghFetchRaw(
   const res = await fetch(url, {
     headers: ghHeaders(token, accept),
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     let msg = `GitHub API error ${res.status}`;

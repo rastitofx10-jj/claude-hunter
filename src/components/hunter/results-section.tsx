@@ -14,6 +14,7 @@ export function ResultsSection({
   querySent,
   page,
   perPage,
+  canPaginate,
   blockedHidden,
   loading,
   onPage,
@@ -28,6 +29,8 @@ export function ResultsSection({
   querySent: string;
   page: number;
   perPage: number;
+  /** false = אין עימוד אמיתי (code mode) — לא מוצגים כפתורי עימוד פיקטיביים */
+  canPaginate?: boolean;
   blockedHidden?: number;
   loading: boolean;
   onPage: (p: number) => void;
@@ -100,7 +103,7 @@ export function ResultsSection({
         ))}
       </div>
 
-      {totalMatches > perPage && (
+      {canPaginate !== false && totalMatches > perPage && (
         <div className="flex items-center justify-center gap-3 pt-2">
           <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => onPage(page - 1)} className="gap-1">
             <ChevronRight className="h-4 w-4" /> הקודם
@@ -109,7 +112,7 @@ export function ResultsSection({
           <Button
             variant="outline"
             size="sm"
-            disabled={loading || (mode === "repos" ? page * perPage >= totalMatches : page >= 3)}
+            disabled={loading || page * perPage >= totalMatches}
             onClick={() => onPage(page + 1)}
             className="gap-1"
           >

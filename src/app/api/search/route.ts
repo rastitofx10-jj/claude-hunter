@@ -226,7 +226,14 @@ export async function POST(req: NextRequest) {
       totalMatches: data.total_count,
       repoCount: groups.size,
       items,
-      note: "חיפוש קוד מחזיר עד 100 קבצים לשאילתה; התוצאות מקובצות לפי מאגר ומדורגות לפי מדד ההשקעה",
+      // ⚠️ code mode = עמוד אחד תמיד: GitHub code search מוגבל ל-100 תוצאות
+      // לשאילתה ללא עימוד אמיתי — ה-UI לא מציג עימוד במצב קוד כשהשדה הזה false
+      // (בעבר: עימוד פיקטיבי — עמודים 2-3 החזירו בדיוק את אותם מאגרים)
+      canPaginate: false,
+      incompleteResults: !!data.incomplete_results,
+      note: data.incomplete_results
+        ? "אינדקס החיפוש חלקי לשאילתה זו (incomplete_results) — התוצאות עשויות להיות לא מלאות"
+        : "חיפוש קוד מחזיר עד 100 קבצים לשאילתה; התוצאות מקובצות לפי מאגר ומדורגות לפי מדד ההשקעה",
       querySent,
       blockedHidden,
     });

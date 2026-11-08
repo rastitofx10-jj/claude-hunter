@@ -18,21 +18,35 @@ import type { RateInfo } from "@/lib/hunter-types";
 
 export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
   const { token, setToken } = useHunterStore();
+  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [test, setTest] = useState<{ loading: boolean; ok?: boolean; info?: RateInfo }>({ loading: false });
 
-  const runTest = async (t: string) => {
+  // איפוס מצב מקומי בסגירה — בעבר draft/test נשארו בין פתיחות דיאלוג
+  // (ב-onOpenChange ולא ב-effect — אין rerender מדורג)
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setDraft("");
+      setTest({ loading: false });
+    }
+  };
+
+  const runTest = async (t: string): Promise<boolean> => {
     setTest({ loading: true });
     try {
       const info = await apiFetch<RateInfo>("/api/rate-limit", t);
-      setTest({ loading: false, ok: !info.error, info });
+      const ok = !info.error;
+      setTest({ loading: false, ok, info });
+      return ok;
     } catch (e) {
       setTest({ loading: false, ok: false, info: { hasToken: false, error: e instanceof Error ? e.message : "שגיאה" } });
+      return false;
     }
   };
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         {trigger ?? (
           <Button variant="outline" size="sm" className="gap-1.5">
@@ -77,15 +91,19 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
-              onClick={() => {
-                setToken(draft.trim());
-                if (draft.trim()) void runTest(draft.trim());
+              // בדיקה ראשונה ורק אז שמירה — טוקן שגוי לא נכנס ל-store ולא מזהם את
+              // כל הבקשות הבאות (בעבר: setToken מיידי לפני אימות כלשהו)
+              onClick={async () => {
+                const t = draft.trim();
+                if (!t) return;
+                const ok = await runTest(t);
+                if (ok) setToken(t);
               }}
               disabled={test.loading || !draft.trim()}
               className="gap-1.5"
             >
               {test.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              שמור ובדוק
+              בדוק ושמור
             </Button>
             {token && (
               <Button
@@ -117,7 +135,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
               {test.ok ? (
                 <div className="space-y-1">
                   <p className="flex items-center gap-1.5 font-medium">
-                    <CheckCircle2 className="h-4 w-4" /> הטוקן תקין!
+                    <CheckCircle2 className="h-4 w-4" /> הטוקן תקין{draft.trim() && token !== draft.trim() ? " — נשמר ל-store" : ""}!
                   </p>
                   {test.info.core && (
                     <p dir="ltr" className="font-mono text-xs">

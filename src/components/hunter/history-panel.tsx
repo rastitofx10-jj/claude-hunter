@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "@/hooks/use-toast";
 import { History as HistoryIcon, Loader2, Play, Trash2, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,7 @@ export function HistoryPanel({
   const del = useMutation({
     mutationFn: (id: string) => apiFetch(`/api/history?id=${id}`, token, { method: "DELETE" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["history"] }),
+    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) {
@@ -52,7 +54,11 @@ export function HistoryPanel({
           variant="ghost"
           size="sm"
           className="gap-1.5 text-xs text-muted-foreground"
-          onClick={() => del.mutate("all")}
+          onClick={() => {
+            // אישור לפני מחיקת כל ההיסטוריה (בעבר: לחיצה אחת מחקה הכל בלי אזהרה)
+            if (!window.confirm("למחוק את כל היסטוריית החיפושים? הפעולה אינה ניתנת לשחזור.")) return;
+            del.mutate("all");
+          }}
         >
           <Trash className="h-3.5 w-3.5" /> נקה הכל
         </Button>

@@ -112,7 +112,7 @@ export async function mineDna(
           `/repos/${full}/contents/${c.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`,
           token
         );
-        rawUrl = `https://github.com/${full}/blob/${branch}/${c.path}`;
+        rawUrl = `https://github.com/${full}/blob/${branch}/${c.path.split("/").map(encodeURIComponent).join("/")}`; // קידוד נתיב — רווחים/#/? בשמות קבצים שוברים קישור גולמי
       } catch {
         content = null;
       }

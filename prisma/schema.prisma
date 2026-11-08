@@ -55,6 +55,8 @@ model DnaArtifact {
   createdAt   DateTime @default(now())
 
   @@unique([sourceRepo, path])
+  @@index([sourceRepo])
+  @@index([kind])
 }
 
 // כימרה — יצירת AI ממוזגת מכמה ריפואי אליטה + פקודות עבודה למוצר שלנו

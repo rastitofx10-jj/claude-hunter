@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runNextAutopilotPhase, AutopilotError } from "@/lib/autopilot";
+import { db } from "@/lib/db";
+import { runNextAutopilotPhase, AutopilotError, parseAutopilotState } from "@/lib/autopilot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -14,11 +15,17 @@ const MAX_PHASES_PER_RUN = 4;
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
-  if (!Number.isInteger(numId)) {
+  if (!Number.isInteger(numId) || numId <= 0) {
     return NextResponse.json({ error: "מזהה לא תקין" }, { status: 400 });
   }
 
   try {
+    // שלבים שכבר בוצעו מריצות קודמות — חייבים להיכלל ב-remaining,
+    // אחרת משימה בת 6 שלבים עם 2 בוצעים דיווחה remaining: 2 גם כשנשארו 4
+    const pre = await db.mission.findUnique({ where: { id: numId }, select: { autopilot: true } });
+    const preState = parseAutopilotState(pre?.autopilot ?? null);
+    const preDone = preState.steps.length + preState.failures.length;
+
     const steps: NonNullable<Awaited<ReturnType<typeof runNextAutopilotPhase>>["executed"]>[] = [];
     const failures: { phaseIndex: number; error: string }[] = [];
     let totalPhases = 0;
@@ -47,7 +54,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       if (!r.executed && !r.failure) break; // תקיעה — לא להיתקע בלולאה
     }
 
-    if (steps.length === 0) {
+    if (steps.length === 0 && preDone === 0) {
       const detail = failures.map((f) => `שלב ${f.phaseIndex + 1}: ${f.error}`).join(" · ");
       return NextResponse.json(
         { error: `כל השלבים נכשלו${detail ? `: ${detail}` : ""}` },
@@ -60,7 +67,8 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       steps,
       failures,
       totalPhases,
-      remaining: Math.max(0, totalPhases - (steps.length + failures.length)),
+      // remaining = שלבים שעדיין לא בוצעו גם מריצות קודמות וגם מזו
+      remaining: Math.max(0, totalPhases - (preDone + steps.length + failures.length)),
     });
   } catch (e) {
     if (e instanceof AutopilotError) {

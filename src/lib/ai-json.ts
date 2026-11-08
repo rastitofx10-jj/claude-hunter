@@ -40,52 +40,150 @@ export function withTimeout<T>(
   ]);
 }
 
+/**
+ * מסיר רק גדר קוד שעוטפת את כל הpayload (```json ... ``` בתחילת/סוף) —
+ * לא נוגע בגדרות בתוך ערכי ה-JSON עצמם (קטעי קוד לגיטימיים בשדות),
+ * שהסרה שלהן הרסה payload תקין (באג קריטי שתוקן).
+ */
 export function stripFences(raw: string): string {
-  return raw.replace(/```(?:json|markdown)?/gi, "").trim();
+  let s = raw.trim();
+  // גדר פותחת רק בתחילת הpayload: ```json / ```JSON / ```
+  s = s.replace(/^```[a-zA-Z0-9]*\s*\n?/, "");
+  // גדר סוגרת רק בסוף הpayload
+  s = s.replace(/\n?```\s*$/, "");
+  return s.trim();
+}
+
+/**
+ * ל-SKILL.md ושאר מסמכי markdown: מסיר רק גדר עוטפת בלבד —
+ * כל הגדרות הקוד הפנימיות (```bash וכו') נשמרות כפי שה-AI כתב אותן.
+ */
+export function stripOuterFence(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^```(?:markdown|md)?\s*\n/i, "");
+  s = s.replace(/\n```\s*$/i, "");
+  return s.trim();
 }
 
 export function repairTrailingCommas(s: string): string {
   return s.replace(/,\s*([}\]])/g, "$1");
 }
 
+/**
+ * תיקון ציטוטים פנימיים עם מעקב מיקום-מפתח:
+ * מחרוזת שנפתחת אחרי `{` `,` `[` היא מפתח → `":` סוגרת אותה.
+ * מחרוזת שנפתחת אחרי `:` היא ערך → `"` לפני `:` נחשב תוכן פנימי ומבריח
+ * (המקרה הפתולוגי `"paste":"do "X": now"`), ואילו סגירה לפני `,` `}` `]` תקפה.
+ */
 export function escapeInnerQuotes(s: string): string {
   let out = "";
   let inStr = false;
+  let backslashes = 0; // רץ-בריחה: ספירת \\ רצופים כדי לא לפגוע ב-\" תקין
+  let keyPos = true; // האם המחרוזת הבאה נפתחת במיקום מפתח?
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (c === '"' && s[i - 1] !== "\\") {
-      if (!inStr) {
+    if (!inStr) {
+      if (c === '"') {
         inStr = true;
+        backslashes = 0;
         out += c;
         continue;
       }
-      let j = i + 1;
-      while (j < s.length && /\s/.test(s[j])) j++;
-      const nxt = s[j];
-      if (nxt === undefined || nxt === "," || nxt === "}" || nxt === "]" || nxt === ":") {
-        inStr = false;
+      if (c === ':' || c === '}' || c === ']') {
+        keyPos = false;
+        out += c;
+        continue;
+      }
+      if (c === ',' || c === '{' || c === '[') {
+        keyPos = true;
+        out += c;
+        continue;
+      }
+      if (!/\s/.test(c)) keyPos = false; // ערך סקלרי (123/true) — אחריו המחרוזת הבאה אינה מפתח
+      out += c;
+    } else {
+      if (c === '"') {
+        const escaped = backslashes % 2 === 1;
+        if (escaped) {
+          out += c; // \" תקין — נשאר בתוך המחרוזת
+          backslashes = 0;
+          continue;
+        }
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        const nxt = s[j];
+        if (
+          nxt === undefined ||
+          nxt === ',' ||
+          nxt === '}' ||
+          nxt === ']' ||
+          (nxt === ':' && keyPos)
+        ) {
+          inStr = false;
+          out += c;
+          backslashes = 0;
+        } else {
+          out += '\\"'; // ציטוט פנימי בתוך ערך — מבריחים
+          backslashes = 0;
+        }
+      } else if (c === '\\') {
+        backslashes++;
         out += c;
       } else {
-        out += '\\"';
+        if (c !== '\n' && c !== '\r') backslashes = 0;
+        out += c;
       }
-    } else if (inStr && c === "\\") {
-      out += c + (s[i + 1] ?? "");
-      i++;
-    } else {
-      out += c;
     }
   }
   return out;
 }
 
+/**
+ * סריקת סוגריים מאוזנים מה-{ הראשון — מוצא את סוף האובייקט האמיתי
+ * (lastIndexOf נכשל כשיש פרוזה עם } אחרי ה-JSON), מתעלם מסוגריים בתוך מחרוזות.
+ */
+function balancedObjectSlice(s: string, start: number): string | null {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 export function extractJson(raw: string, Err: ErrorFactory = AiJsonError): Record<string, unknown> {
   const cleaned = stripFences(raw);
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) {
+  // מערך ברמה העליונה — רק אם `[` מקדים את `{` (מודלים מסוימים מחזירים [...])
+  const firstObj = cleaned.indexOf("{");
+  const firstArr = cleaned.indexOf("[");
+  if (firstArr !== -1 && (firstObj === -1 || firstArr < firstObj)) {
+    const arrEnd = cleaned.lastIndexOf("]");
+    if (arrEnd > firstArr) {
+      try {
+        const parsed: unknown = JSON.parse(cleaned.slice(firstArr, arrEnd + 1));
+        if (Array.isArray(parsed)) return { items: parsed };
+      } catch {
+        // לא מערך תקין — נמשיך לנתיב האובייקט
+      }
+    }
+  }
+  if (firstObj === -1) {
     throw new Err("ה-AI לא החזיר JSON — נסה שוב");
   }
-  const slice = cleaned.slice(start, end + 1);
+  const slice = balancedObjectSlice(cleaned, firstObj) ?? cleaned.slice(firstObj, cleaned.lastIndexOf("}") + 1);
   for (const cand of [
     slice,
     repairTrailingCommas(slice),
@@ -93,7 +191,10 @@ export function extractJson(raw: string, Err: ErrorFactory = AiJsonError): Recor
     repairTrailingCommas(escapeInnerQuotes(slice)),
   ]) {
     try {
-      return JSON.parse(cand) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(cand);
+      if (parsed !== null && !Array.isArray(parsed) && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
     } catch {
       // next repair level
     }

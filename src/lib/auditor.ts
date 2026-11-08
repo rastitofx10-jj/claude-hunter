@@ -101,7 +101,8 @@ async function searchWithBackoff<T>(path: string, token: string | null): Promise
       return await ghFetch<T>(path, token);
     } catch (e) {
       lastErr = e;
-      const rl = e instanceof GhError && (e.status === 403 || e.status === 429);
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && /rate limit|secondary/.test(msg);
       if (!rl || attempt === delays.length) throw e;
       await sleep(delays[attempt]);
     }
@@ -165,7 +166,9 @@ export async function verifyEvidenceLive(
         );
         filesFound += resp.total_count ?? 0;
         if ((resp.total_count ?? 0) > 0) verifiedAny = true;
-        await sleep(2100);
+        // מכסת code search = 10/דקה — 6.5s בין שאילתות אימות (בעבר 2.1s שרפו את המכסה
+        // והפילו 403 על שאילתות ההמשך — ראיות אליטה נפסלו בשווא)
+        await sleep(6_500);
       }
       check = { fullName: f.fullName, claimed: claims.join(" + "), filesFound, verified: verifiedAny };
       // קרקע-אמת: אם האינדקס מחטיא (0 קבצים) — גריפה ישירה של הקובץ שנתגלה בסריקה
@@ -190,7 +193,7 @@ export async function verifyEvidenceLive(
     }
     checks.push(check);
     await onProgress?.(i + 1, targets.length, check);
-    await sleep(2100); // קצב מכסת החיפוש
+    await sleep(6_500); // קצב מכסת code search (10 לדקה)
   }
   return checks;
 }
@@ -338,20 +341,28 @@ export async function startAudit(req: NextRequest, runId: number): Promise<void>
     (err as Error & { status?: number }).status = 404;
     throw err;
   }
+  // נעילה סינכרונית לפני כל await — סוגר את חלון ה-TOCTOU
+  // (בעבר: ה-ID נרשם רק בתוך executeAudit אחרי כמה await — שני POST מקביליים הריצו ביקורת כפולה)
   if (activeAudits.has(runId)) {
     const err = new Error("ביקורת כבר רצה על הסריקה הזו");
     (err as Error & { status?: number }).status = 409;
     throw err;
   }
-  const current = await db.sweepRun.findUnique({ where: { id: runId }, select: { audit: true } });
-  const running = safeJsonParse<{ status?: string }>(current?.audit ?? null, {});
-  if (running.status === "running") {
-    const err = new Error("ביקורת כבר רצה על הסריקה הזו");
-    (err as Error & { status?: number }).status = 409;
-    throw err;
+  activeAudits.add(runId);
+  try {
+    const current = await db.sweepRun.findUnique({ where: { id: runId }, select: { audit: true } });
+    const running = safeJsonParse<{ status?: string }>(current?.audit ?? null, {});
+    if (running.status === "running") {
+      const err = new Error("ביקורת כבר רצה על הסריקה הזו");
+      (err as Error & { status?: number }).status = 409;
+      throw err;
+    }
+    const token = await resolveToken(req);
+    void executeAudit(runId, token);
+  } catch (e) {
+    activeAudits.delete(runId); // כשל מוקדם — משחררים את הנעילה
+    throw e;
   }
-  const token = await resolveToken(req);
-  void executeAudit(runId, token);
 }
 
 export function parseAudit(raw: string | null): AuditResult | null {

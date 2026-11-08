@@ -165,6 +165,7 @@ export function GenesisPanel() {
     mutationFn: (repo: string | null) =>
       apiFetch(`/api/dna-library${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`, token, { method: "DELETE" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["dna-library"] }),
+    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
   });
 
   // ---------- קציר אוטונומי ----------
@@ -419,6 +420,8 @@ export function GenesisPanel() {
                 size="sm"
                 className="h-8 gap-1 text-red-600 hover:bg-red-50 hover:text-red-700"
                 onClick={() => {
+                  // דרישת אישור — מחיקת כל הספרייה בלחיצה אחת בלי בקשת אישור הייתה אסון נתונים בהמתנה
+                  if (!window.confirm("למחוק את כל ספריית ה-DNA? כל הגנים מכל הריפואי יימחקו לצמיתות.")) return;
                   clearRepo.mutate(null);
                   setSelectedRepos(new Set());
                 }}

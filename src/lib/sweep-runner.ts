@@ -25,11 +25,29 @@ import type { NextRequest } from "next/server";
 const activeRuns = new Set<number>();
 let startingSweep = false; // נעילת-תחילה: סוגר את חלון המירוץ בין הבדיקה ליצירה (POST כפול = סריקה אחת)
 
+/** שורת running שלא התעדכנה מעבר לזה = נגמרה (crash/restart) — משחררים אוטומטיק.
+ * בעבר: שורת running תקועה חסמה את פתיחת סריקות חדשות לנצח (409 תמידי). */
+const STALE_RUN_MS = 15 * 60_000; // 15 דקות בלי עדכון התקדמות = מת
+
+async function reapStaleRuns(): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - STALE_RUN_MS);
+    const dead = await db.sweepRun.updateMany({
+      where: { status: "running", updatedAt: { lt: cutoff } },
+      data: { status: "failed", error: "הריצה נקטעה (השרת אותחל) — סימון אוטומטי" },
+    });
+    if (dead.count > 0) console.error(`[sweep] reaped ${dead.count} stale running row(s)`);
+  } catch (e) {
+    console.error("[sweep] stale reaper failed", e);
+  }
+}
+
 export function isRunActive(id: number): boolean {
   return activeRuns.has(id);
 }
 
 export async function hasActiveRun(): Promise<boolean> {
+  await reapStaleRuns();
   const running = await db.sweepRun.findFirst({ where: { status: "running" }, select: { id: true } });
   return running !== null || activeRuns.size > 0;
 }

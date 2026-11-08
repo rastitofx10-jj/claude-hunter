@@ -29,7 +29,7 @@ async function listLight() {
     contentLength: number;
   }[]>`
     SELECT id, sourceRepo, path, kind, name, description, rawUrl, size,
-           substr(content, 1, ${PREVIEW_CHARS + 1}) AS contentPreview,
+           substr(content, 1, ${PREVIEW_CHARS}) AS contentPreview,
            length(content) AS contentLength
     FROM DnaArtifact
     ORDER BY sourceRepo ASC, kind ASC, name ASC

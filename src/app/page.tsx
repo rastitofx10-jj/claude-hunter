@@ -223,6 +223,7 @@ export default function ClaudeHunterPage() {
                 repoCount={results.repoCount}
                 mode={results.mode}
                 querySent={results.querySent}
+                canPaginate={results.canPaginate !== false && results.mode === "repos"}
                 blockedHidden={results.blockedHidden}
                 page={searchBody.page ?? 1}
                 perPage={searchBody.perPage ?? 24}

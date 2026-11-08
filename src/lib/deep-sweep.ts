@@ -122,8 +122,9 @@ interface GhSearchResp<T> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * קריאת חיפוש עם התאוששות ממכסה: GitHub מתיר 30 חיפושים/דקה.
- * 403/429 מכסה ← המתנה אקספוננציאלית (8s/16s/32s) וניסיון חוזר — במקום לאבד את השאילתה.
+ * קריאת חיפוש עם התאוששות ממכסה: GitHub מתיר 30 חיפושים/דקה (ולקוד 10/דקה).
+ * 403/429 של מכסה ← המתנה אקספוננציאלית (8s/16s/32s) וניסיון חוזר.
+ * 403 שאינו מכסה (ריפו פרטי, אין הרשאה) ← נזרק מיד — בעבר כל 403 צבר 8+16+32 שניות על שאילתה שלא תתוקן.
  */
 async function searchWithBackoff<T>(path: string, token: string | null): Promise<T> {
   const delays = [8_000, 16_000, 32_000];
@@ -133,7 +134,8 @@ async function searchWithBackoff<T>(path: string, token: string | null): Promise
       return await ghFetch<T>(path, token);
     } catch (e) {
       lastErr = e;
-      const isRateLimit = e instanceof GhError && (e.status === 403 || e.status === 429);
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      const isRateLimit = e instanceof GhError && (e.status === 403 || e.status === 429) && /rate limit|secondary/.test(msg);
       if (!isRateLimit || attempt === delays.length) throw e;
       await sleep(delays[attempt]);
     }
@@ -213,8 +215,10 @@ export async function runQueryArsenal(
     }
     reports.push(report);
     await onProgress(report, i + 1, queries.length);
-    // קצב בטוח למכסת החיפוש של GitHub (30 לדקה)
-    if (i < queries.length - 1) await sleep(2100);
+    // קצב מותאם סוג שאילתה: code search מקבל מכסה נפרדת ומחמירה (10 לדקה)
+    // — 2.1s מספיק ל-repositories אבל שורף את מכסת הקוד אחרי ~10 שאילתות.
+    // (בעבר: 2.1s לכולם → שאילתות קוד 403-וות ונרשמו כשגיאות)
+    if (i < queries.length - 1) await sleep(query.kind === "code" ? 6_500 : 2_100);
   }
 
   return { reports, codeHits, repoHits };
@@ -395,13 +399,26 @@ export async function mineTopCandidates(
       })
     ).map((x) => x.sourceRepo)
   );
-  const fresh = candidates.filter((c) => !minedNames.has(c.fullName)).slice(0, maxRepos);
+  const fresh = candidates
+    .filter((c) => {
+      if (minedNames.has(c.fullName)) return false;
+      // חוק הסף — כרייה רק לריפו שמוכיחים ראייה למודל מזכה או יכולות .claude אמתיות,
+      // או שמקורם ארגון האליטה עצמו. מועמד סטרילי (אין ראייה, אין יכולות) לא מתגנב לספרייה.
+      // (בעבר: ריפו עם 4.x בלבד וכוכבים נכרה לספריית ה-DNA)
+      if (c.evidence === "hard") return true;
+      if (c.capabilityHits > 0) return true;
+      if (/^anthropics\//i.test(c.fullName)) return true;
+      return false;
+    })
+    .slice(0, maxRepos);
   const reports: MinedRepoReport[] = [];
 
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
     const results = await Promise.allSettled(batch.map((c) => harvestRepo(c.fullName, token)));
-    results.forEach((r, j) => {
+    // await במקום void — כתיבות התקדמות לא-מסודרות יכלו להחזיר progress אחורה
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
       const c = batch[j];
       if (r.status === "fulfilled") {
         const v = r.value;
@@ -413,7 +430,7 @@ export async function mineTopCandidates(
           kinds: v.kinds,
         };
         reports.push(rep);
-        void onProgress?.(reports.length, fresh.length, rep);
+        await onProgress?.(reports.length, fresh.length, rep);
       } else {
         const rep: MinedRepoReport = {
           repo: c.fullName,
@@ -424,9 +441,9 @@ export async function mineTopCandidates(
           error: r.reason instanceof Error ? r.reason.message : "כרייה נכשלה",
         };
         reports.push(rep);
-        void onProgress?.(reports.length, fresh.length, rep);
+        await onProgress?.(reports.length, fresh.length, rep);
       }
-    });
+    }
   }
   return reports;
 }

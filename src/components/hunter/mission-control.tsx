@@ -6,7 +6,7 @@
 // דיווח שדה ← זיקוק לקחים ← DNA חדש נולד — הספרייה מחכימה מכל משימה
 // ============================================================
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Target,
@@ -73,6 +73,7 @@ interface CompiledPayload {
   phases: MissionPhase[];
   promptSequence: MissionPrompt[];
   skillMd: string;
+  skillMdSource?: "ai" | "fallback";
   risks: string[];
   successCriteria: string[];
   selectedDna: SelectedDna[];
@@ -106,6 +107,7 @@ interface MissionDetail extends CompiledPayload {
   context: string | null;
   status: string;
   report: { outcome: string; verdict: string; lessons: string[]; bornDnaId: number | null; reportedAt: string } | null;
+  reportHistory?: { outcome: string; reportedAt: string }[];
   autopilot: MissionAutopilot | null;
   autopilotAt: string | null;
   createdAt: string;
@@ -129,6 +131,59 @@ interface ReportResponse {
 }
 
 // ---------- constants ----------
+
+/** נרמול הגנתי בצד הלקוח: שורות DB פגומות/ישנות לא מפילות את הלשונית
+ * (בעבר: .length/.map על שדות שהשרת הבטיח בטיפוסים אבל לא בריצה) */
+function normalizeDetail(d: MissionDetail): MissionDetail {
+  const autopilot = d.autopilot
+    ? {
+        steps: Array.isArray(d.autopilot.steps)
+          ? d.autopilot.steps.map((s) => ({
+              phaseIndex: typeof s.phaseIndex === "number" ? s.phaseIndex : 0,
+              title: typeof s.title === "string" ? s.title : `שלב ${(s.phaseIndex ?? 0) + 1}`,
+              deliverable: typeof s.deliverable === "string" ? s.deliverable : "",
+              executedAt: typeof s.executedAt === "string" ? s.executedAt : "",
+            }))
+          : [],
+        failures: Array.isArray(d.autopilot.failures) ? d.autopilot.failures : [],
+      }
+    : null;
+  const report =
+    d.report && typeof d.report === "object"
+      ? { ...d.report, lessons: Array.isArray(d.report.lessons) ? d.report.lessons : [] }
+      : null;
+  return {
+    ...d,
+    phases: Array.isArray(d.phases)
+      ? d.phases.map((p) => ({
+          ...p,
+          steps: Array.isArray(p.steps) ? p.steps : [],
+          dnaUsed: Array.isArray(p.dnaUsed) ? p.dnaUsed : [],
+        }))
+      : [],
+    promptSequence: Array.isArray(d.promptSequence) ? d.promptSequence : [],
+    risks: Array.isArray(d.risks) ? d.risks : [],
+    successCriteria: Array.isArray(d.successCriteria) ? d.successCriteria : [],
+    selectedDna: Array.isArray(d.selectedDna) ? d.selectedDna : [],
+    autopilot,
+    report,
+  };
+}
+
+/** זמן יחסי קצר בעברית לתצוגה בהיסטוריה */
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  const mins = Math.round(diff / 60_000);
+  if (mins < 1) return "עכשיו";
+  if (mins < 60) return `לפני ${mins} דק׳`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `לפני ${hrs} שע׳`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `לפני ${days} ימים`;
+  return new Date(iso).toLocaleDateString("he-IL");
+}
 
 const EXAMPLE_GOALS = [
   "לבנות סקיל של סינתזת חיפוש-רשת שמפיק סקירה מאומתת עם מקורות",
@@ -161,6 +216,8 @@ export function MissionControlPanel() {
   const [reportOpen, setReportOpen] = useState(false);
   const [outcome, setOutcome] = useState("success");
   const [notes, setNotes] = useState("");
+  // שומר מזהה הבקשה האחרונה — תשובה מיושנת של משימה A לא תדרוס תצוגה של B
+  const detailReqRef = useRef(0);
 
   // ---------- queries ----------
   const { data: listData, isLoading: listLoading } = useQuery({
@@ -175,12 +232,16 @@ export function MissionControlPanel() {
         method: "POST",
         body: JSON.stringify({ goal: goal.trim(), context: context.trim() }),
       }),
-    onSuccess: (data) => {
-      setDetail(data); // ה-POST מחזיר את אותה צורה בדיוק כמו GET — אין יותר סתימה ידנית
+    onSuccess: (raw) => {
+      const data = normalizeDetail(raw); // ה-POST מחזיר את אותה צורה בדיוק כמו GET
+      setDetail(data);
       setGoal("");
       setContext("");
       void qc.invalidateQueries({ queryKey: ["missions"] });
-      toast({ title: "משימה הודרה 🎯", description: `${data.missionName} · ${data.phases.length} שלבים · נבחרו ${data.selectedDna.length} גנים` });
+      toast({
+        title: "משימה הודרה 🎯",
+        description: `${data.missionName} · ${data.phases.length} שלבים · נבחרו ${data.selectedDna.length} גנים${data.skillMdSource === "fallback" ? " · SKILL.md: גיבוי מקומי" : ""}`,
+      });
     },
     onError: (e: Error) => toast({ title: "ההידור נכשל", description: e.message, variant: "destructive" }),
   });
@@ -227,16 +288,23 @@ export function MissionControlPanel() {
   // ניתוק/ריסטרט לא מאבד כלום, וההתקדמות נראית שלב-שלב.
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotProgress, setAutopilotProgress] = useState("");
+  // דגל ביטול: אינטראקציות אחר לולאה פתוחה לא מבצעות setState אחרי unmount
+  const autopilotCancelRef = useRef(false);
 
   const runAutopilot = async (id: number) => {
     if (autopilotRunning) return;
     setAutopilotRunning(true);
+    autopilotCancelRef.current = false;
+    // טוקן טרי מה-store בכל קריאה — בעבר: closure תקוע על טוקן ישן
+    const currentToken = useHunterStore.getState().token;
     let okSteps = 0;
     let failSteps = 0;
     try {
       for (let guard = 0; guard < 12; guard++) {
+        if (autopilotCancelRef.current) return; // בוטל — בלי toast ובלי setState
         setAutopilotProgress(`מבצע שלב ${okSteps + failSteps + 1}…`);
-        const data = await apiFetch<StepResponse>(`/api/mission/${id}/autopilot/step`, token, { method: "POST" });
+        const data = await apiFetch<StepResponse>(`/api/mission/${id}/autopilot/step`, currentToken, { method: "POST" });
+        if (autopilotCancelRef.current) return;
         if (data.executed) okSteps++;
         if (data.failure) failSteps++;
         setAutopilotProgress(
@@ -282,10 +350,13 @@ export function MissionControlPanel() {
   });
 
   const loadDetail = async (id: number) => {
+    const reqId = ++detailReqRef.current;
     try {
       const d = await apiFetch<MissionDetail>(`/api/mission/${id}`, token);
-      setDetail(d);
+      if (reqId !== detailReqRef.current) return; // תשובה מיושנת — לחיצה חדשה יותר כבר באוויר
+      setDetail(normalizeDetail(d));
     } catch (e) {
+      if (reqId !== detailReqRef.current) return;
       toast({ title: "טעינת המשימה נכשלה", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
@@ -343,6 +414,7 @@ export function MissionControlPanel() {
               onChange={(e) => setGoal(e.target.value)}
               placeholder="לדוגמה: לבנות סקיל שמבצע חיפוש רשת, מצליב מקורות ומפיק דוח מאומת…"
               className="mb-2 min-h-20 resize-y"
+              maxLength={2000}
               aria-label="מטרת המשימה"
             />
             <Input
@@ -350,6 +422,7 @@ export function MissionControlPanel() {
               onChange={(e) => setContext(e.target.value)}
               placeholder="הקשר נוסף (רשות): סטאק, אילוצים, דדליין…"
               className="mb-3 text-sm"
+              maxLength={2000}
               aria-label="הקשר נוסף"
             />
             <div className="mb-3 flex flex-wrap gap-1.5">
@@ -383,6 +456,7 @@ export function MissionControlPanel() {
           {/* משימה פעילה — פירוט */}
           {detail && (
             <MissionDetailCard
+              key={detail.id} // מצב openSteps לא דולף בין משימות
               m={detail}
               onCopy={copyText}
               onStatus={(s) => statusM.mutate({ id: detail.id, status: s })}
@@ -432,6 +506,12 @@ export function MissionControlPanel() {
                         <span>{it.phaseCount} שלבים</span>
                         <span>·</span>
                         <span>{it.promptCount} פרומפטים</span>
+                        {it.createdAt && (
+                          <>
+                            <span>·</span>
+                            <span>{relTime(it.createdAt)}</span>
+                          </>
+                        )}
                         {it.hasReport && (
                           <>
                             <span>·</span>
@@ -481,6 +561,7 @@ export function MissionControlPanel() {
             onChange={(e) => setNotes(e.target.value)}
             placeholder="מה עבד? מה נשבר? איזה תרגיל עקף את הבעיה? איזה פרומפט הניב את התוצאה הטובה ביותר?"
             className="min-h-24 resize-y"
+            maxLength={4000}
             aria-label="הערות מהשטח"
           />
 
@@ -561,6 +642,11 @@ function MissionDetailCard({
               {m.missionName}
             </h3>
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${st.cls}`}>{st.label}</span>
+            {m.skillMdSource === "fallback" && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="יצירת ה-SKILL.md ב-AI נכשלה — נעשה שימוש בגיבוי המקומי">
+                SKILL.md: גיבוי מקומי
+              </span>
+            )}
           </div>
           {m.oneLiner && <p className="mt-1 text-sm font-medium">{m.oneLiner}</p>}
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">מטרה: {m.goal}</p>
@@ -822,7 +908,13 @@ function MissionDetailCard({
             </>
           )}
         </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => onStatus("in_progress")}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || m.status === "done"}
+          onClick={() => onStatus("in_progress")}
+          title={m.status === "done" ? "משימה שהושלמה נועלה את הסטטוס" : "סימון המשימה כבביצוע"}
+        >
           <Play className="ml-1 h-3.5 w-3.5" /> סמן בביצוע
         </Button>
         <Button size="sm" onClick={onReport} disabled={busy} className="bg-violet-600 text-white hover:bg-violet-700">
