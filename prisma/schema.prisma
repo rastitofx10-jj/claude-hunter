@@ -122,6 +122,8 @@ model LiveHunt {
   stages    String    @default("[]") // JSON: רשומות שלבים שהושלמו [{key,title,summary,ms,evidence}]
   goal      String    @default("") // המטרה שנגזרה אוטומטית מהממצאים (מתמלאת בשלב ההידור)
   missionId Int? // המשימה שנוצרה בשלב ההידור
+  generation Int      @default(1) // דור הציד — דור 2+ זורע את שאילתות האבולוציה של הציד הקודם
+  seededFrom Int? // מזהה הציד שממנו נזרעו השאילתות המתפתחות (null = דור 1)
   dnaBefore Int       @default(0) // גודל הספרייה בפתיחה — להוכחת צמיחה
   dnaAfter  Int       @default(0) // גודל הספרייה בסיום
   llmCalls  Int       @default(0) // סך קריאות LLM בשרשרת

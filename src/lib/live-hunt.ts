@@ -99,6 +99,10 @@ interface HuntCtx {
   evidence: (key: string) => Record<string, unknown> | null;
   /** סך קריאות ה-LLM שנצברו עד כה — למסקנת המערכה (מקור אמת אחד) */
   llmCallsSoFar: number;
+  /** דור הציד — דור 2+ זורע את שאילתות האבולוציה של הציד הקודם */
+  generation: number;
+  /** הציד האב — ממנו נזרעו השאילתות המתפתחות */
+  seededFrom: number | null;
 }
 
 // ---------- טוקן שרת (DB ← env) ----------
@@ -121,6 +125,8 @@ interface SwarmStageState {
   watch: CandidateFlat[];
   triage: TriageVerdict[];
   profiles: SharpProfile[];
+  autoSaved: number;
+  autoSavedSkipped: number;
   llmCalls: number;
   llmFailures: string[];
 }
@@ -166,34 +172,100 @@ async function llmTry<T>(fn: () => Promise<T>, failures: string[], label: string
 
 // ---------- שלב 1: hunt ----------
 
-async function stageHunt(): Promise<{ summary: string; evidence: Record<string, unknown> }> {
+/** סיווג שאילתה מתפתחת לנקודת-קצה הנכונה: מותאמי-repo (stars/fork/topic) נמדדים ב-repo search, השאר קוד */
+function evolvedKind(q: string): "code" | "repo" {
+  if (/\b(stars|fork|pushed|topic|created|size):/i.test(q)) return "repo";
+  return "code";
+}
+
+const MAX_HUNT_QUERIES = 24;
+
+/**
+ * זריעה גנרציונית: השאילתות שהלהקה הציעה בציד האב מממשות בפועל בציד הבן.
+ * (בעבר: queryEvolution נרשם ונזרק — הלמידה לא חזרה לשטח. עכשיו הדור הבא צד איתן.)
+ */
+async function parentEvolvedQueries(ctx: HuntCtx): Promise<{ queries: SweepQuery[]; blindSpots: string[]; parentId: number | null }> {
+  if (!ctx.seededFrom) return { queries: [], blindSpots: [], parentId: null };
+  const parent = await db.liveHunt.findUnique({ where: { id: ctx.seededFrom } });
+  if (!parent) return { queries: [], blindSpots: [], parentId: null };
+  const stages = safeJsonParse<LiveHuntStageRecord[]>(parent.stages ?? "[]", []);
+  const attack = stages.find((s) => s.key === "attack")?.evidence as { queryEvo?: { nextQueries?: unknown; blindSpots?: unknown } } | undefined;
+  const raw = Array.isArray(attack?.queryEvo?.nextQueries) ? (attack!.queryEvo!.nextQueries as unknown[]) : [];
+  const blind = Array.isArray(attack?.queryEvo?.blindSpots) ? (attack!.queryEvo!.blindSpots as unknown[]) : [];
+  const queries: SweepQuery[] = raw
+    .map((x) => String(x ?? "").trim())
+    .filter((q) => q.length >= 8 && q.length <= 240)
+    .slice(0, 10)
+    .map((q) => ({ q, kind: evolvedKind(q), origin: `evolved:gen${ctx.generation}` }));
+  return { queries, blindSpots: blind.map((b) => String(b)).slice(0, 4), parentId: parent.id };
+}
+
+/** איחוד כל המאגרים שדורות קודמים כבר ראו — לבדיקת חדשנות של הדור */
+async function previousKnownRepos(): Promise<Set<string>> {
+  const hunts = await db.liveHunt.findMany({ where: { status: "done" }, orderBy: { id: "desc" }, take: 6 });
+  const known = new Set<string>();
+  for (const h of hunts) {
+    const stages = safeJsonParse<LiveHuntStageRecord[]>(h.stages ?? "[]", []);
+    const he = stages.find((s) => s.key === "hunt")?.evidence as { flat?: { fullName?: unknown }[]; topCandidates?: { fullName?: unknown }[] } | undefined;
+    for (const f of he?.flat ?? []) if (typeof f?.fullName === "string") known.add(f.fullName);
+    for (const t of he?.topCandidates ?? []) if (typeof t?.fullName === "string") known.add(t.fullName);
+  }
+  return known;
+}
+
+async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const token = await getStoredToken();
   const arsenal = buildQueryArsenal();
-  const { reports, codeHits, repoHits } = await runQueryArsenal(token, arsenal, () => {});
+
+  // זריעה גנרציונית — שאילתות האבולוציה של האב נכנסות לשטח באמת
+  const seed = await parentEvolvedQueries(ctx);
+  const seenQ = new Set(arsenal.map((q) => q.q.toLowerCase()));
+  const evolved = seed.queries.filter((q) => !seenQ.has(q.q.toLowerCase()));
+  const budget = Math.max(0, MAX_HUNT_QUERIES - evolved.length);
+  const staticQ = [...arsenal.filter((q) => q.origin.startsWith("registry")), ...arsenal.filter((q) => !q.origin.startsWith("registry"))].slice(0, budget);
+  const queries = [...staticQ, ...evolved];
+
+  const { reports, codeHits, repoHits } = await runQueryArsenal(token, queries, () => {});
   let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits);
-  // סף מודלים כבר אוכף בתוך consolidateCandidates (רק 5.5+/fable) — כאן רק מעשירים
   const enriched = await enrichCandidates(candidates, token, 20);
   const flat = flattenForSwarm(candidates);
 
+  // חדשנות — מה הדור הזה מגלה מעבר לכל הידע המצטבר של הדורות הקודמים
+  const known = await previousKnownRepos();
+  const novelCandidates = candidates.filter((c) => !known.has(c.fullName));
+
   const hard = candidates.filter((c) => c.evidence === "hard").length;
-  const summary = `${arsenal.length} שאילתות · ${candidates.length} מועמדים מדורגים · ${hard} עם ראיה קשה · ${repoHits.length} מאגרים`;
+  const genTag = ctx.generation > 1 ? ` · דור ${ctx.generation} (זריעה מציד #${seed.parentId}: ${evolved.length} שאילתות)` : "";
+  const novelTag = known.size > 0 ? ` · ${novelCandidates.length} חדשים מעבר לידע קודם` : "";
+  const summary = `${queries.length} שאילתות · ${candidates.length} מועמדים מדורגים · ${hard} עם ראיה קשה · ${repoHits.length} מאגרים${genTag}${novelTag}`;
 
   return {
     summary,
     evidence: {
       withToken: !!token,
-      queries: reports.map((r: QueryReport) => ({ q: r.q, kind: r.kind, count: r.count, error: r.error ?? null })),
+      generation: ctx.generation,
+      seededFrom: seed.parentId,
+      evolvedQueries: evolved.map((q) => ({ q: q.q, kind: q.kind, origin: q.origin })),
+      parentBlindSpots: seed.blindSpots,
+      novelCandidates: known.size > 0 ? novelCandidates.length : null,
+      novelTop: novelCandidates.slice(0, 10).map((c) => ({
+        fullName: c.fullName,
+        stars: c.stars,
+        score: c.score,
+        evidence: c.evidence,
+        modelStrings: c.modelStrings.slice(0, 4),
+      })),
+      knownBefore: known.size,
+      queries: reports.map((r: QueryReport) => ({ q: r.q, kind: r.kind, count: r.count, error: r.error ?? null, origin: r.origin })),
       codeHits: codeHits.length,
       repoHits: repoHits.length,
       candidates: candidates.length,
       enriched,
       hardEvidence: hard,
-      // לשלב הלהקה: שטוח + מדורג
       flat: flat.slice(0, 12),
-      // לשלב הכרייה: אובייקטי מועמד מלאים (מכילים fullName/modelStrings וכו')
       topCandidates: candidates.slice(0, 10),
-      executedQueries: arsenal.map((q) => q.q),
-      statsLine: `${arsenal.length} שאילתות · ${codeHits.length} קודים · ${repoHits.length} מאגרים · ${candidates.length} מועמדים · ${enriched} הועשרו`,
+      executedQueries: queries.map((q) => q.q),
+      statsLine: `${queries.length} שאילתות · ${codeHits.length} קודים · ${repoHits.length} מאגרים · ${candidates.length} מועמדים · ${enriched} הועשרו`,
       topList: candidates.slice(0, 8).map((c) => ({
         fullName: c.fullName,
         stars: c.stars,
@@ -241,11 +313,52 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
     }
   }
 
-  const summary = `${triage.length} נשפטו · ${elite.length} אליטה · ${watch.length} מעקב · ${profiles.length} פרופילים${
-    failures.length ? ` · ${failures.length} כשלי LLM` : ""
+  // ארכוב אוטומטי: אליטה חיה נכנסת לרשימת הנשמרים עם סימון מפורש — מודיעין שנשמר בין דורות
+  let autoSaved = 0;
+  let autoSavedSkipped = 0;
+  const triageMap = new Map(triage.map((t) => [t.fullName, t]));
+  for (const e of elite) {
+    try {
+      const existing = await db.savedRepo.findUnique({ where: { fullName: e.fullName } });
+      const reason = triageMap.get(e.fullName)?.reason?.slice(0, 140) ?? "elite בטריאז׳ה";
+      if (!existing) {
+        await db.savedRepo.create({
+          data: {
+            fullName: e.fullName,
+            owner: e.fullName.split("/")[0] ?? "",
+            name: e.fullName.split("/").slice(1).join("/"),
+            url: `https://github.com/${e.fullName}`,
+            description: e.description,
+            stars: e.stars ?? 0,
+            score: Math.min(100, Math.round(e.score ?? 0)),
+            models: e.modelStrings?.slice(0, 6).join(",") ?? null,
+            evidence: JSON.stringify({ contentEvidence: (e.contentEvidence ?? []).slice(0, 3), tier: e.tierLabel ?? null }),
+            notes: `⚔️ ציד חי אוטומטי (#${ctx.id} דור ${ctx.generation}): ${reason}`,
+          },
+        });
+        autoSaved++;
+      } else {
+        // נשמר ידנית על-ידי המשתמש — לא נוגעים בהערות שלו; סימון ציד קיים יתעדכן בלבד
+        if (existing.notes?.includes("ציד חי אוטומטי")) {
+          await db.savedRepo.update({
+            where: { fullName: e.fullName },
+            data: { stars: e.stars ?? existing.stars, score: Math.max(existing.score, Math.min(100, Math.round(e.score ?? 0))) },
+          });
+          autoSaved++;
+        } else {
+          autoSavedSkipped++;
+        }
+      }
+    } catch (saveErr) {
+      failures.push(`ארכוב אליטה ${e.fullName}: ${saveErr instanceof Error ? saveErr.message : "שגיאה"}`);
+    }
+  }
+
+  const summary = `${triage.length} נשפטו · ${elite.length} אליטה · ${watch.length} מעקב · ${profiles.length} פרופילים · ${autoSaved} נשמרו אוטומטית${
+    failures.length ? ` · ${failures.length} כשלים` : ""
   }`;
 
-  const state: SwarmStageState = { flat, elite, watch, triage, profiles, llmCalls: calls, llmFailures: failures };
+  const state: SwarmStageState = { flat, elite, watch, triage, profiles, autoSaved, autoSavedSkipped, llmCalls: calls, llmFailures: failures };
   return { summary, evidence: state as unknown as Record<string, unknown> };
 }
 
@@ -611,7 +724,8 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   ]);
 
   const bornDnaId = Number(growEv?.bornDnaId) || null;
-  const summary = `${ctx.done.length} שלבים הושלמו · ${missionCount} משימות בסך הכל · ${ctx.llmCallsSoFar} קריאות LLM`;
+  const huntEv2 = huntEv as { novelCandidates?: unknown; evolvedQueries?: unknown[]; knownBefore?: unknown } | null;
+  const summary = `דור ${ctx.generation} · ${ctx.done.length} שלבים · ${missionCount} משימות בסך הכל · ${ctx.llmCallsSoFar} קריאות LLM`;
 
   return {
     summary,
@@ -623,8 +737,14 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
         queries: Array.isArray(huntEv?.queries) ? (huntEv?.queries as unknown[]).length : 0,
         candidates: Number(huntEv?.candidates) || 0,
         hardEvidence: Number(huntEv?.hardEvidence) || 0,
+        generation: ctx.generation,
+        seededFrom: ctx.seededFrom,
+        evolvedQueriesRun: Array.isArray(huntEv2?.evolvedQueries) ? huntEv2!.evolvedQueries!.length : 0,
+        novelCandidates: typeof huntEv2?.novelCandidates === "number" ? huntEv2.novelCandidates : null,
+        novelTop: Array.isArray(huntEv2?.novelTop) ? (huntEv2!.novelTop as Array<Record<string, unknown>>).slice(0, 6) : [],
+        knownBefore: Number(huntEv2?.knownBefore) || 0,
       },
-      swarm: { elite: swarm?.elite.length ?? 0, watch: swarm?.watch.length ?? 0, llmCalls: swarm?.llmCalls ?? 0 },
+      swarm: { elite: swarm?.elite.length ?? 0, watch: swarm?.watch.length ?? 0, llmCalls: swarm?.llmCalls ?? 0, autoSaved: swarm?.autoSaved ?? 0 },
       attack: { topMoves: attack?.attack.topMoves.length ?? 0, nextQueries: attack?.queryEvo.nextQueries.length ?? 0, llmCalls: attack?.llmCalls ?? 0 },
       briefHeadline: attack?.brief.headline ?? null,
       decisiveMove: attack?.brief.decisiveMove ?? null,
@@ -665,8 +785,12 @@ export async function startLiveHunt(): Promise<{ id: number }> {
     throw new LiveHuntError("ציד חי כבר רץ כרגע — חכה לסיומו", 409);
   }
   const dnaBefore = await db.dnaArtifact.count();
+  // דור גנרציוני: כל ציד חדש הוא דור+1 מהציד המוצלח האחרון — הבן צד עם שאילתות האבולוציה של האב
+  const prevDone = await db.liveHunt.findFirst({ where: { status: "done" }, orderBy: { id: "desc" }, select: { id: true, generation: true } });
+  const generation = (prevDone?.generation ?? 0) + 1;
+  const seededFrom = prevDone?.id ?? null;
   const hunt = await db.liveHunt.create({
-    data: { status: "running", stageKey: "hunt", dnaBefore },
+    data: { status: "running", stageKey: "hunt", dnaBefore, generation, seededFrom },
   });
   return { id: hunt.id };
 }
@@ -678,6 +802,8 @@ export interface LiveHuntState {
   done: boolean;
   goal: string;
   missionId: number | null;
+  generation: number;
+  seededFrom: number | null;
   dnaBefore: number;
   dnaAfter: number;
   llmCalls: number;
@@ -694,6 +820,8 @@ export function serializeLiveHunt(row: {
   stages: string | null;
   goal: string;
   missionId: number | null;
+  generation: number;
+  seededFrom: number | null;
   dnaBefore: number;
   dnaAfter: number;
   llmCalls: number;
@@ -710,6 +838,8 @@ export function serializeLiveHunt(row: {
     done: row.status === "done",
     goal: row.goal,
     missionId: row.missionId ?? null,
+    generation: row.generation,
+    seededFrom: row.seededFrom ?? null,
     dnaBefore: row.dnaBefore,
     dnaAfter: row.dnaAfter,
     llmCalls: row.llmCalls,
@@ -750,6 +880,8 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     done: doneStages,
     evidence: (key) => doneStages.find((s) => s.key === key)?.evidence ?? null,
     llmCallsSoFar: row.llmCalls,
+    generation: row.generation,
+    seededFrom: row.seededFrom ?? null,
   };
 
   const stageKey = row.stageKey;
@@ -759,7 +891,7 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     let result: { summary: string; evidence: Record<string, unknown>; stay?: boolean };
     switch (stageKey) {
       case "hunt":
-        result = await stageHunt();
+        result = await stageHunt(ctx);
         break;
       case "swarm":
         result = await stageSwarm(ctx);
@@ -848,6 +980,7 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
       where: { id },
       data: { status: "failed", error: msg.slice(0, 500) },
     });
+    console.error(`[live-hunt] stage ${stageKey} failed for hunt #${id}:`, e);
     // AutopilotError עם 4xx = בעיה מובנית — מוחזר כפי שהוא; אחרת שגיאת שרת
     const status = e instanceof LiveHuntError ? e.status : e instanceof AutopilotError ? e.status : 500;
     const err = new LiveHuntError(msg, status || 500);

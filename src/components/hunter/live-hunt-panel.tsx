@@ -45,6 +45,8 @@ interface HuntState {
   done: boolean;
   goal: string;
   missionId: number | null;
+  generation: number;
+  seededFrom: number | null;
   dnaBefore: number;
   dnaAfter: number;
   llmCalls: number;
@@ -60,6 +62,8 @@ interface HuntListItem {
   stageKey: string;
   goal: string;
   missionId: number | null;
+  generation: number;
+  seededFrom: number | null;
   dnaBefore: number;
   dnaAfter: number;
   llmCalls: number;
@@ -428,6 +432,13 @@ export function LiveHuntPanel() {
           {hunt && !finished && (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="outline">ציד #{hunt.id}</Badge>
+              {hunt.generation > 1 ? (
+                <Badge className="bg-amber-500/90 text-white gap-1">
+                  <Dna className="h-3 w-3" /> דור {hunt.generation} — זריעה מציד #{hunt.seededFrom}
+                </Badge>
+              ) : (
+                <Badge variant="secondary">דור 1 — ארסנל בסיסי</Badge>
+              )}
               {hunt.goal && (
                 <span className="max-w-full truncate" dir="auto">
                   🎯 {hunt.goal}
@@ -533,6 +544,11 @@ export function LiveHuntPanel() {
                     className="flex w-full flex-wrap items-center gap-2 rounded-lg border p-2.5 text-start transition-colors hover:bg-muted/50"
                   >
                     <span className="text-xs font-semibold">#{item.id}</span>
+                    {item.generation > 1 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        דור {item.generation}
+                      </Badge>
+                    )}
                     {item.status === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
                     {item.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500" />}
                     {item.status === "running" && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />}

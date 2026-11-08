@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
         stageKey: r.stageKey,
         goal: r.goal.slice(0, 160),
         missionId: r.missionId,
+        generation: r.generation,
+        seededFrom: r.seededFrom,
         dnaBefore: r.dnaBefore,
         dnaAfter: r.dnaAfter,
         llmCalls: r.llmCalls,
