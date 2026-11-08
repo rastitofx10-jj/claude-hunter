@@ -27,3 +27,4 @@ agent-ctx/
 .DS_Store
 .idea/
 .vscode/
+tsconfig.tsbuildinfo
